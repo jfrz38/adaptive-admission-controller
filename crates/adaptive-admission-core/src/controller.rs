@@ -1,6 +1,7 @@
 use crate::admission::AdmissionController;
 use crate::pid::{PidController, PidObservation};
 use crate::priority_queue::PriorityQueue;
+use crate::queue_timeout::QueueTimeoutController;
 use crate::scheduler::Scheduler;
 use crate::statistics::Statistics;
 use crate::{
@@ -13,6 +14,7 @@ pub struct Controller {
     admission: AdmissionController,
     scheduler: Scheduler,
     queue: PriorityQueue,
+    queue_timeout: QueueTimeoutController,
     statistics: Statistics,
     pid: PidController,
     maximum_threshold: u16,
@@ -29,6 +31,7 @@ impl Controller {
             admission: AdmissionController::new(config.initial_threshold),
             scheduler: Scheduler::new(config.max_concurrent_requests),
             queue: PriorityQueue::new(config.max_queued_requests, config.queue_timeout_ms),
+            queue_timeout: QueueTimeoutController::new(config.queue_timeout_ratio),
             statistics: Statistics::new(config.statistics),
             pid: PidController::new(config.pid),
             maximum_threshold: config.initial_threshold,
@@ -104,6 +107,7 @@ impl Controller {
             let latency_ms = now.as_millis() - started_at.as_millis();
             self.statistics
                 .record_success(latency_ms, now, self.scheduler.active_count());
+            self.update_queue_timeout();
         }
         self.fill_capacity(&mut actions, now);
         Ok(actions)
@@ -204,6 +208,7 @@ impl Controller {
         self.current_time = Some(now);
         self.statistics
             .advance_to(now, self.scheduler.active_count());
+        self.update_queue_timeout();
         let mut actions = Vec::new();
         if !self.shutdown {
             let observation = PidObservation {
@@ -251,6 +256,15 @@ impl Controller {
             .checked_add(1)
             .ok_or(ControllerError::RequestIdExhausted)?;
         Ok(RequestId::new(value))
+    }
+
+    fn update_queue_timeout(&mut self) {
+        let Some(snapshot) = self.statistics.latest_snapshot() else {
+            return;
+        };
+        if let Some(timeout_ms) = self.queue_timeout.update(snapshot) {
+            self.queue.update_timeout(timeout_ms);
+        }
     }
 
     fn fill_capacity(&mut self, actions: &mut Vec<Action>, now: Timestamp) {

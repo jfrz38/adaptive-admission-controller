@@ -84,6 +84,10 @@ impl PriorityQueue {
         self.requests.len() >= self.max_queued_requests
     }
 
+    pub(crate) fn update_timeout(&mut self, queue_timeout_ms: u64) {
+        self.queue_timeout_ms = queue_timeout_ms;
+    }
+
     pub(crate) fn contains(&self, request_id: RequestId) -> bool {
         self.requests.contains_key(&request_id)
     }

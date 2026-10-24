@@ -9,6 +9,7 @@ pub enum ConfigError {
     ThresholdOutOfRange { value: u16 },
     ZeroConcurrency,
     ZeroQueueTimeout,
+    QueueTimeoutRatioOutOfRange,
     ZeroStatisticsMinWindow,
     StatisticsWindowOrder { minimum_ms: u64, maximum_ms: u64 },
     ZeroStatisticsMinSamples,
@@ -29,6 +30,12 @@ impl Display for ConfigError {
             }
             Self::ZeroConcurrency => write!(formatter, "max concurrency must be greater than zero"),
             Self::ZeroQueueTimeout => write!(formatter, "queue timeout must be greater than zero"),
+            Self::QueueTimeoutRatioOutOfRange => {
+                write!(
+                    formatter,
+                    "queue timeout ratio must be finite and within 0 < ratio <= 1"
+                )
+            }
             Self::ZeroStatisticsMinWindow => {
                 write!(
                     formatter,
