@@ -74,6 +74,7 @@ pub struct Config {
     pub max_concurrent_requests: usize,
     pub max_queued_requests: usize,
     pub queue_timeout_ms: u64,
+    pub statistics: StatisticsConfig,
 }
 
 impl Default for Config {
@@ -83,6 +84,7 @@ impl Default for Config {
             max_concurrent_requests: 10,
             max_queued_requests: 1_000,
             queue_timeout_ms: 500,
+            statistics: StatisticsConfig::default(),
         }
     }
 }
@@ -100,8 +102,79 @@ impl Config {
         if self.queue_timeout_ms == 0 {
             return Err(ConfigError::ZeroQueueTimeout);
         }
+        self.statistics.validate()?;
         Ok(self)
     }
+}
+
+/// Bounds and readiness criteria for execution statistics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatisticsConfig {
+    pub min_window_ms: u64,
+    pub max_window_ms: u64,
+    pub min_samples: usize,
+    pub min_percentile_samples: usize,
+    pub max_samples: usize,
+    pub latency_percentile: u8,
+}
+
+impl Default for StatisticsConfig {
+    fn default() -> Self {
+        Self {
+            min_window_ms: 2_000,
+            max_window_ms: 30_000,
+            min_samples: 250,
+            min_percentile_samples: 250,
+            max_samples: 1_000,
+            latency_percentile: 90,
+        }
+    }
+}
+
+impl StatisticsConfig {
+    pub(crate) fn validate(self) -> Result<Self, ConfigError> {
+        if self.min_window_ms == 0 {
+            return Err(ConfigError::ZeroStatisticsMinWindow);
+        }
+        if self.max_window_ms < self.min_window_ms {
+            return Err(ConfigError::StatisticsWindowOrder {
+                minimum_ms: self.min_window_ms,
+                maximum_ms: self.max_window_ms,
+            });
+        }
+        if self.min_samples == 0 {
+            return Err(ConfigError::ZeroStatisticsMinSamples);
+        }
+        if self.min_percentile_samples == 0 {
+            return Err(ConfigError::ZeroStatisticsPercentileSamples);
+        }
+        if self.max_samples < self.min_samples.max(self.min_percentile_samples) {
+            return Err(ConfigError::StatisticsSampleLimitTooSmall {
+                maximum: self.max_samples,
+                required: self.min_samples.max(self.min_percentile_samples),
+            });
+        }
+        if self.latency_percentile > 100 {
+            return Err(ConfigError::StatisticsPercentileOutOfRange {
+                value: self.latency_percentile,
+            });
+        }
+        Ok(self)
+    }
+}
+
+/// Statistics published from one coherent execution window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatisticsSnapshot {
+    pub id: u64,
+    pub started_at: Timestamp,
+    pub ended_at: Timestamp,
+    pub percentile_latency_ms: u64,
+    pub minimum_latency_ms: u64,
+    pub average_latency_ms: f64,
+    pub successful_requests: u64,
+    pub throughput_per_second: f64,
+    pub max_in_flight: usize,
 }
 
 /// Host-reported result of started work.
