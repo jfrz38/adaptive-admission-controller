@@ -17,6 +17,7 @@
 //! ```
 
 mod admission;
+mod auto_tuning;
 mod controller;
 mod error;
 mod pid;

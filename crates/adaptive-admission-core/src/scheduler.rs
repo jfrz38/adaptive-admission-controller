@@ -41,4 +41,9 @@ impl Scheduler {
     pub(crate) const fn capacity(&self) -> usize {
         self.max_concurrent_requests
     }
+
+    pub(crate) fn update_capacity(&mut self, max_concurrent_requests: usize) {
+        debug_assert!(max_concurrent_requests > 0);
+        self.max_concurrent_requests = max_concurrent_requests;
+    }
 }
