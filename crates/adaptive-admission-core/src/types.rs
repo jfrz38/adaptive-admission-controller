@@ -67,14 +67,15 @@ impl Priority {
     }
 }
 
-/// Initial fixed limits for a controller instance.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Configuration for one controller instance.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
     pub initial_threshold: u16,
     pub max_concurrent_requests: usize,
     pub max_queued_requests: usize,
     pub queue_timeout_ms: u64,
     pub statistics: StatisticsConfig,
+    pub pid: PidConfig,
 }
 
 impl Default for Config {
@@ -85,6 +86,7 @@ impl Default for Config {
             max_queued_requests: 1_000,
             queue_timeout_ms: 500,
             statistics: StatisticsConfig::default(),
+            pid: PidConfig::default(),
         }
     }
 }
@@ -103,6 +105,57 @@ impl Config {
             return Err(ConfigError::ZeroQueueTimeout);
         }
         self.statistics.validate()?;
+        self.pid.validate()?;
+        Ok(self)
+    }
+}
+
+/// Parameters for the admission PID feedback loop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PidConfig {
+    pub proportional_gain: f64,
+    pub integral_gain: f64,
+    pub derivative_gain: f64,
+    pub interval_ms: u64,
+    pub max_delta_percentage: f64,
+    pub integral_decay: f64,
+}
+
+impl Default for PidConfig {
+    fn default() -> Self {
+        Self {
+            proportional_gain: 0.2,
+            integral_gain: 0.5,
+            derivative_gain: 0.0,
+            interval_ms: 500,
+            max_delta_percentage: 10.0,
+            integral_decay: 0.5,
+        }
+    }
+}
+
+impl PidConfig {
+    pub(crate) fn validate(self) -> Result<Self, ConfigError> {
+        for (name, value) in [
+            ("proportional", self.proportional_gain),
+            ("integral", self.integral_gain),
+            ("derivative", self.derivative_gain),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(ConfigError::InvalidPidGain { name });
+            }
+        }
+        if self.interval_ms == 0 {
+            return Err(ConfigError::ZeroPidInterval);
+        }
+        if !self.max_delta_percentage.is_finite()
+            || !(0.0..=100.0).contains(&self.max_delta_percentage)
+        {
+            return Err(ConfigError::PidDeltaOutOfRange);
+        }
+        if !self.integral_decay.is_finite() || !(0.0..=1.0).contains(&self.integral_decay) {
+            return Err(ConfigError::PidDecayOutOfRange);
+        }
         Ok(self)
     }
 }
@@ -208,6 +261,10 @@ pub enum CancellationReason {
 /// Decision that the embedding host must apply.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
+    ThresholdChanged {
+        previous: u16,
+        current: u16,
+    },
     Start {
         request_id: RequestId,
     },

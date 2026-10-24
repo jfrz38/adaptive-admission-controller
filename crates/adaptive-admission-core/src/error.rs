@@ -15,6 +15,10 @@ pub enum ConfigError {
     ZeroStatisticsPercentileSamples,
     StatisticsSampleLimitTooSmall { maximum: usize, required: usize },
     StatisticsPercentileOutOfRange { value: u8 },
+    InvalidPidGain { name: &'static str },
+    ZeroPidInterval,
+    PidDeltaOutOfRange,
+    PidDecayOutOfRange,
 }
 
 impl Display for ConfigError {
@@ -56,6 +60,24 @@ impl Display for ConfigError {
                 write!(
                     formatter,
                     "statistics percentile {value} is outside 0..=100"
+                )
+            }
+            Self::InvalidPidGain { name } => {
+                write!(formatter, "PID {name} gain must be finite and non-negative")
+            }
+            Self::ZeroPidInterval => {
+                write!(formatter, "PID interval must be greater than zero")
+            }
+            Self::PidDeltaOutOfRange => {
+                write!(
+                    formatter,
+                    "PID maximum delta must be finite and within 0..=100"
+                )
+            }
+            Self::PidDecayOutOfRange => {
+                write!(
+                    formatter,
+                    "PID integral decay must be finite and within 0..=1"
                 )
             }
         }

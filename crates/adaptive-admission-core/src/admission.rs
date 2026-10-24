@@ -15,4 +15,13 @@ impl AdmissionController {
             threshold: self.threshold,
         })
     }
+
+    pub(crate) fn update_threshold(&mut self, threshold: u16) -> Option<(u16, u16)> {
+        if threshold == self.threshold {
+            return None;
+        }
+        let previous = self.threshold;
+        self.threshold = threshold;
+        Some((previous, threshold))
+    }
 }

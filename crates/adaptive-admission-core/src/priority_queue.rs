@@ -62,6 +62,8 @@ pub(crate) struct PriorityQueue {
     max_queued_requests: usize,
     queue_timeout_ms: u64,
     next_sequence: u64,
+    entries_since_update: usize,
+    exits_since_update: usize,
 }
 
 impl PriorityQueue {
@@ -73,6 +75,8 @@ impl PriorityQueue {
             max_queued_requests,
             queue_timeout_ms,
             next_sequence: 0,
+            entries_since_update: 0,
+            exits_since_update: 0,
         }
     }
 
@@ -117,6 +121,7 @@ impl PriorityQueue {
             sequence,
         });
         self.next_sequence = next_sequence;
+        self.entries_since_update = self.entries_since_update.saturating_add(1);
         Ok(())
     }
 
@@ -124,6 +129,7 @@ impl PriorityQueue {
         while let Some(entry) = self.scheduling.pop() {
             if self.matches(entry.request_id, entry.sequence) {
                 self.requests.remove(&entry.request_id);
+                self.exits_since_update = self.exits_since_update.saturating_add(1);
                 return Some(entry.request_id);
             }
         }
@@ -166,6 +172,13 @@ impl PriorityQueue {
             request_ids.push(request_id);
         }
         request_ids
+    }
+
+    pub(crate) fn take_activity(&mut self) -> (usize, usize) {
+        let activity = (self.entries_since_update, self.exits_since_update);
+        self.entries_since_update = 0;
+        self.exits_since_update = 0;
+        activity
     }
 
     fn matches(&self, request_id: RequestId, sequence: u64) -> bool {

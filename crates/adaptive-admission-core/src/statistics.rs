@@ -96,6 +96,25 @@ impl Statistics {
         percentile_type_7(&self.priorities, percentile).map(|value| value as u16)
     }
 
+    pub(crate) fn priority_threshold(&self, percentage: f64, maximum: u16) -> Option<u16> {
+        if !percentage.is_finite()
+            || !(0.0..=100.0).contains(&percentage)
+            || self.priorities.len() < self.config.min_samples
+        {
+            return None;
+        }
+        if percentage <= 0.0 {
+            return Some(0);
+        }
+        if percentage >= 100.0 {
+            return Some(maximum);
+        }
+
+        let percentile = percentage.round() as u8;
+        self.priority_percentile(percentile)
+            .map(|priority| priority.saturating_add(1).min(maximum))
+    }
+
     fn close_window(&mut self, now: Timestamp, in_flight: usize) {
         let window = self
             .active

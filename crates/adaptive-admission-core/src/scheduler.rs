@@ -37,4 +37,8 @@ impl Scheduler {
     pub(crate) fn active_count(&self) -> usize {
         self.active.len()
     }
+
+    pub(crate) const fn capacity(&self) -> usize {
+        self.max_concurrent_requests
+    }
 }

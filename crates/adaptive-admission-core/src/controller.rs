@@ -1,4 +1,5 @@
 use crate::admission::AdmissionController;
+use crate::pid::{PidController, PidObservation};
 use crate::priority_queue::PriorityQueue;
 use crate::scheduler::Scheduler;
 use crate::statistics::Statistics;
@@ -13,6 +14,8 @@ pub struct Controller {
     scheduler: Scheduler,
     queue: PriorityQueue,
     statistics: Statistics,
+    pid: PidController,
+    maximum_threshold: u16,
     next_request_id: u64,
     current_time: Option<Timestamp>,
     shutdown: bool,
@@ -27,6 +30,8 @@ impl Controller {
             scheduler: Scheduler::new(config.max_concurrent_requests),
             queue: PriorityQueue::new(config.max_queued_requests, config.queue_timeout_ms),
             statistics: Statistics::new(config.statistics),
+            pid: PidController::new(config.pid),
+            maximum_threshold: config.initial_threshold,
             next_request_id: 0,
             current_time: None,
             shutdown: false,
@@ -163,12 +168,11 @@ impl Controller {
         let statistics_deadline = (!self.shutdown || self.scheduler.active_count() > 0)
             .then(|| self.statistics.next_deadline())
             .flatten();
-        match (queue_deadline, statistics_deadline) {
-            (Some(queue), Some(statistics)) => Some(queue.min(statistics)),
-            (Some(queue), None) => Some(queue),
-            (None, Some(statistics)) => Some(statistics),
-            (None, None) => None,
-        }
+        let pid_deadline = (!self.shutdown).then(|| self.pid.next_deadline()).flatten();
+        [queue_deadline, statistics_deadline, pid_deadline]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// Returns the most recently published execution statistics, if any.
@@ -200,14 +204,45 @@ impl Controller {
         self.current_time = Some(now);
         self.statistics
             .advance_to(now, self.scheduler.active_count());
-        self.queue
-            .expire(now)
-            .into_iter()
-            .map(|request_id| Action::Evict {
-                request_id,
-                reason: EvictionReason::QueueTimeout,
-            })
-            .collect()
+        let mut actions = Vec::new();
+        if !self.shutdown {
+            let observation = PidObservation {
+                active: self.scheduler.active_count(),
+                capacity: self.scheduler.capacity(),
+                queue_entries: 0,
+                queue_exits: 0,
+            };
+            if self
+                .pid
+                .next_deadline()
+                .is_some_and(|deadline| now >= deadline)
+            {
+                let (queue_entries, queue_exits) = self.queue.take_activity();
+                let observation = PidObservation {
+                    queue_entries,
+                    queue_exits,
+                    ..observation
+                };
+                if let Some(percentage) = self.pid.advance(now, observation) {
+                    let threshold = self.threshold_for_percentage(percentage);
+                    if let Some((previous, current)) = self.admission.update_threshold(threshold) {
+                        actions.push(Action::ThresholdChanged { previous, current });
+                    }
+                }
+            } else {
+                self.pid.advance(now, observation);
+            }
+        }
+        actions.extend(
+            self.queue
+                .expire(now)
+                .into_iter()
+                .map(|request_id| Action::Evict {
+                    request_id,
+                    reason: EvictionReason::QueueTimeout,
+                }),
+        );
+        actions
     }
 
     fn reserve_request_id(&mut self) -> Result<RequestId, ControllerError> {
@@ -231,5 +266,14 @@ impl Controller {
                 .observe_in_flight(self.scheduler.active_count());
             actions.push(Action::Start { request_id });
         }
+    }
+
+    fn threshold_for_percentage(&self, percentage: f64) -> u16 {
+        self.statistics
+            .priority_threshold(percentage, self.maximum_threshold)
+            .unwrap_or_else(|| {
+                ((percentage * f64::from(self.maximum_threshold) / 100.0).round() as u16)
+                    .min(self.maximum_threshold)
+            })
     }
 }
