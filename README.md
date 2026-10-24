@@ -25,7 +25,7 @@ See [Architecture and project scope](docs/architecture.md) for:
 
 ## Current status
 
-The first three implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, and PID feedback that adapts the priority threshold. Adaptive timeouts, automatic concurrency and latency tuning, WebAssembly interfaces, and host adapters are planned subsequent increments.
+The first four implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, PID feedback that adapts the priority threshold, and queue timeouts adapted from published execution latency. Automatic concurrency and latency tuning, WebAssembly interfaces, and host adapters are planned subsequent increments.
 
 ## Development
 
