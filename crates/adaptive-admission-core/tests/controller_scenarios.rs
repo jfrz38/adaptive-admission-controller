@@ -34,7 +34,7 @@ fn starts_immediately_when_capacity_is_available() {
     );
     assert_eq!(
         controller.next_deadline(),
-        Some(Timestamp::from_millis(30_000))
+        Some(Timestamp::from_millis(500))
     );
 }
 
@@ -179,7 +179,7 @@ fn expires_waiting_work_at_its_deadline_before_reusing_capacity() {
     );
     assert_eq!(
         controller.next_deadline(),
-        Some(Timestamp::from_millis(30_000))
+        Some(Timestamp::from_millis(500))
     );
 }
 

@@ -202,9 +202,15 @@ Successful execution latency is measured from the emitted `Start` action to the 
 
 Latency and priority percentiles use Type 7 linear interpolation and truncate the interpolated result toward zero. The implementation uses integer arithmetic for interpolation so the result remains deterministic across native and WebAssembly targets. Priority samples form an independent bounded rolling window and include normal submissions even when threshold admission or queue capacity rejects them; submissions after shutdown are excluded.
 
-Statistics configuration defines minimum and maximum bucket durations, publication and percentile sample thresholds, a sample-memory bound, and the latency percentile. Invalid ranges are rejected. `next_deadline` returns the earliest queue or statistics deadline, allowing the host to rotate a low-throughput bucket without a core-owned timer. Published floating-point averages and throughput values are constructed only from finite integer values and a non-zero duration.
+Statistics configuration defines minimum and maximum bucket durations, publication and percentile sample thresholds, a sample-memory bound, and the latency percentile. Invalid ranges are rejected. `next_deadline` returns the earliest queue, statistics, or PID deadline, allowing the host to drive every time-based transition without a core-owned timer. Published floating-point averages and throughput values are constructed only from finite integer values and a non-zero duration.
 
-The PID controller uses observed queue and execution activity to adjust an admission percentage. An auto-tuner uses latency and throughput feedback to update concurrency and target latency. Invalid or non-finite values must not be allowed to corrupt controller state.
+The PID controller uses queue entries, queue exits, active work, and free execution capacity to adjust an admission percentage in the inclusive range `0..=100`. Positive pressure reduces admission, while spare capacity recovers it. Each update is bounded by a configured maximum delta. The integral term decays during recovery and is not accumulated when doing so would push an already saturated output farther outside its range.
+
+PID updates are host-driven deadlines, just like queue expiration and statistics rotation. Activity is accumulated until the next update and consumed exactly once. If the host wakes after the requested deadline, the core performs one update from the accumulated observation and schedules the next deadline from the supplied timestamp; it does not invent empty intermediate intervals.
+
+The resulting percentage is converted to an exclusive priority threshold. When the bounded priority window has enough samples, the percentage is rounded to its nearest whole percentile and the corresponding cumulative percentile plus one is used. Otherwise the percentage is mapped linearly to the configured initial threshold. The effective threshold never exceeds that initial threshold. A changed effective value produces `ThresholdChanged`; unchanged values do not produce an action.
+
+An auto-tuner will use latency and throughput feedback to update concurrency and target latency in a later iteration. Invalid or non-finite values must not be allowed to corrupt controller state.
 
 ## Randomness
 
@@ -341,3 +347,11 @@ Statistics, PID feedback, adaptive timeouts, automatic tuning, WebAssembly inter
 The second iteration adds bounded priority and latency samples, host-driven execution windows, published statistics snapshots, and observed in-flight tracking. The scheduler retains each active request's start timestamp so successful service latency excludes queue waiting time. The controller exposes the latest published snapshot and cumulative priority percentiles, and its next deadline now includes statistics-window rotation.
 
 PID feedback, adaptive timeouts, and automatic concurrency and latency tuning remain deferred. This keeps the measurement contract independently testable before statistics begin changing admission or capacity decisions.
+
+### Third implementation iteration
+
+The third iteration adds host-driven PID admission feedback. A focused PID component maintains the admission percentage, integral, previous error, and next update deadline. The priority queue reports bounded activity counters to the controller, which combines them with active and available execution capacity and converts each due PID result into an effective priority threshold.
+
+PID gains must be finite and non-negative, its interval must be positive, its maximum per-update delta must be within `0..=100`, and integral decay must be within `0..=1`. The default parameters preserve the TypeScript implementation's tuning values while execution remains synchronous and deterministic in the portable core.
+
+Adaptive queue timeouts and automatic concurrency and target-latency tuning remain deferred. Keeping capacity and timeout fixed makes admission feedback independently testable before a later controller starts changing more than one actuator.
