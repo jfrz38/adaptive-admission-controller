@@ -65,6 +65,31 @@ The core acts as a state machine. It owns admission decisions and control state,
 - Translate controller decisions into framework- or gateway-specific behavior.
 - Integrate logging, metrics, shutdown, and lifecycle events.
 
+### What "core" and "host" mean
+
+The **core** is the portable Rust state machine in `adaptive-admission-core`. It stores controller metadata, validates transitions, updates the control algorithm, and returns decisions. It does not own an HTTP request, execute application work, read a clock, or create a timer.
+
+The **host** is the environment embedding the core, such as a Node.js process, gateway plugin, proxy, or native application. It associates controller request IDs with real requests or tasks and translates actions into platform operations. For example:
+
+```text
+host receives request A
+host -> submit(priority, 1000)
+core -> Start(request_id=1)
+host executes A
+host -> complete(1, Success, 1080)
+core records an 80 ms execution and may return Start(request_id=2)
+```
+
+When a request waits, the host retains the real request while the core retains only its metadata. The host schedules the value returned by `next_deadline` and later calls `advance_time`; the core can then return `Evict` without ever owning or executing host work.
+
+### Internal organization
+
+The Rust implementation preserves the responsibility-oriented organization of the original TypeScript project. Admission, scheduling, priority queueing, statistics, PID control, timeout calculation, and automatic tuning remain focused components with private state and dedicated tests.
+
+This is not a requirement to translate every TypeScript class one-to-one. Rust structs and modules are used idiomatically, and a component is separated when it owns a coherent responsibility or invariant. The top-level `Controller` is the facade coordinating those components.
+
+This internal organization does not weaken the host/core boundary: every component listed above belongs to the portable core and must remain independent of host tasks, clocks, timers, logging implementations, and asynchronous runtimes.
+
 ## Execution model
 
 A conceptual API has the following shape:
@@ -78,6 +103,13 @@ advance_time(now_ms)                      -> Actions
 shutdown(now_ms)                          -> Actions
 next_deadline()                           -> Option<Timestamp>
 ```
+
+The initial Rust API refines this shape in several ways:
+
+- `submit` returns both a core-generated `u64` request ID and any immediate actions, so the host can retain a queued request even when no action is emitted.
+- `cancel(request_id, now_ms)` reports host cancellation of queued work.
+- Timestamps are monotonic `u64` milliseconds and a regressing timestamp is rejected rather than clamped.
+- Completion reports `Success` or `Failure`; only successful work will contribute latency samples.
 
 Returned actions represent decisions rather than host operations:
 
@@ -147,6 +179,10 @@ A zero-dependency implementation can use:
 This avoids requiring arbitrary deletion from Rust's standard `BinaryHeap` and keeps insertion, selection, and expiration logarithmic in normal operation.
 
 Queue memory must be explicitly bounded. A deployment should be able to configure a maximum number of queued requests and a policy for submissions that exceed it. Although WebAssembly stores only controller metadata, the host may retain HTTP requests, buffers, and framework state for every queued ID.
+
+The initial policy rejects the newly submitted request with `QueueFull`. Alternative policies, such as evicting the least important queued request, require an explicit later design decision.
+
+Queue deadlines are inclusive: a queued request expires when `deadline <= now`. Every timestamped operation processes elapsed deadlines before applying the requested transition. Consequently, expiration wins when cancellation or newly available capacity occurs at exactly the same timestamp as the deadline.
 
 ## Statistics and control
 
@@ -276,3 +312,18 @@ A low-risk implementation sequence is:
 7. Add integrations only after distinguishing common guarantees from host-specific behavior.
 
 This sequence validates the architecture before committing to a gateway ABI and keeps portability concerns out of the control algorithm.
+
+### First implementation iteration
+
+The first iteration contains one workspace crate, `adaptive-admission-core`, with no production dependencies. It implements configuration validation, deterministic request IDs, fixed-threshold admission, bounded priority/FIFO queueing, fixed concurrency, queue expiration, completion, cancellation, shutdown, and explicit actions.
+
+Its initial internal components are:
+
+```text
+Controller
+├── AdmissionController
+├── Scheduler
+└── PriorityQueue
+```
+
+Statistics, PID feedback, adaptive timeouts, automatic tuning, WebAssembly interfaces, and host adapters are deliberately deferred until this state-machine boundary is covered by conformance scenarios.
