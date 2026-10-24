@@ -1,5 +1,8 @@
 [workspace]
-members = ["crates/adaptive-admission-core"]
+members = [
+    "crates/adaptive-admission-component",
+    "crates/adaptive-admission-core",
+]
 resolver = "3"
 
 [workspace.package]
