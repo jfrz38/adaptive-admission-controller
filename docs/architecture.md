@@ -210,6 +210,8 @@ PID updates are host-driven deadlines, just like queue expiration and statistics
 
 The resulting percentage is converted to an exclusive priority threshold. When the bounded priority window has enough samples, the percentage is rounded to its nearest whole percentile and the corresponding cumulative percentile plus one is used. Otherwise the percentage is mapped linearly to the configured initial threshold. The effective threshold never exceeds that initial threshold. A changed effective value produces `ThresholdChanged`; unchanged values do not produce an action.
 
+Published average latency also adapts the timeout assigned to new queue entries. The configured timeout is the initial fallback; after each newly published snapshot, the controller rounds `average latency * timeout ratio` to milliseconds and adopts a positive finite result. Requests already queued retain their original deadlines, and discarded statistics windows do not change the timeout.
+
 An auto-tuner will use latency and throughput feedback to update concurrency and target latency in a later iteration. Invalid or non-finite values must not be allowed to corrupt controller state.
 
 ## Randomness
@@ -355,3 +357,11 @@ The third iteration adds host-driven PID admission feedback. A focused PID compo
 PID gains must be finite and non-negative, its interval must be positive, its maximum per-update delta must be within `0..=100`, and integral decay must be within `0..=1`. The default parameters preserve the TypeScript implementation's tuning values while execution remains synchronous and deterministic in the portable core.
 
 Adaptive queue timeouts and automatic concurrency and target-latency tuning remain deferred. Keeping capacity and timeout fixed makes admission feedback independently testable before a later controller starts changing more than one actuator.
+
+### Fourth implementation iteration
+
+The fourth iteration adds adaptive queue timeouts driven by published execution statistics. The configured timeout remains the initial value until a valid snapshot exists. Each new snapshot can update the timeout to the rounded product of average successful execution latency and a configured ratio; zero or non-finite results leave the previous value unchanged. The ratio must be finite and within `0 < ratio <= 1`.
+
+Timeout updates apply only to requests queued afterward. Existing requests retain the deadline assigned at submission, preserving deterministic expiration without rebuilding the deadline heap. No independent timeout-update deadline is introduced because recalculation without a new statistics snapshot cannot produce new information.
+
+Automatic concurrency and target-latency tuning remain deferred so that timeout adaptation can be verified while execution capacity stays fixed.

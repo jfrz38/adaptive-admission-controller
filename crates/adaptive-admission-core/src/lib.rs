@@ -21,6 +21,7 @@ mod controller;
 mod error;
 mod pid;
 mod priority_queue;
+mod queue_timeout;
 mod scheduler;
 mod statistics;
 mod types;

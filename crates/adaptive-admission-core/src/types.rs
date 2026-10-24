@@ -74,6 +74,7 @@ pub struct Config {
     pub max_concurrent_requests: usize,
     pub max_queued_requests: usize,
     pub queue_timeout_ms: u64,
+    pub queue_timeout_ratio: f64,
     pub statistics: StatisticsConfig,
     pub pid: PidConfig,
 }
@@ -85,6 +86,7 @@ impl Default for Config {
             max_concurrent_requests: 10,
             max_queued_requests: 1_000,
             queue_timeout_ms: 500,
+            queue_timeout_ratio: 0.33,
             statistics: StatisticsConfig::default(),
             pid: PidConfig::default(),
         }
@@ -103,6 +105,12 @@ impl Config {
         }
         if self.queue_timeout_ms == 0 {
             return Err(ConfigError::ZeroQueueTimeout);
+        }
+        if !self.queue_timeout_ratio.is_finite()
+            || !(0.0..=1.0).contains(&self.queue_timeout_ratio)
+            || self.queue_timeout_ratio == 0.0
+        {
+            return Err(ConfigError::QueueTimeoutRatioOutOfRange);
         }
         self.statistics.validate()?;
         self.pid.validate()?;
