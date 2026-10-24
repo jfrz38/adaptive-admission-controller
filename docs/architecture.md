@@ -194,7 +194,15 @@ The core maintains bounded samples and coherent execution buckets for:
 - Observed in-flight work.
 - Priority distribution.
 
-The implementation must specify the percentile algorithm, rounding behavior, floating-point edge cases, and sample-window semantics. These details are part of the behavioral contract because different valid quantile definitions can produce different admission decisions.
+An execution bucket opens on the first timestamped operation. It closes when both its minimum duration and required percentile sample count have been reached, or when its maximum duration expires. A bucket closed at its maximum duration can still be published with fewer percentile samples when it has enough general samples. Empty and undersized buckets are discarded without replacing the latest published snapshot.
+
+Operations arriving when the maximum duration has elapsed first close the previous half-open bucket and then belong to the new bucket. A successful completion that makes an unexpired bucket ready is included before that bucket closes. Bucket IDs advance for every closed bucket, including discarded buckets, so published IDs may contain gaps.
+
+Successful execution latency is measured from the emitted `Start` action to the corresponding successful `complete`; time spent waiting in the priority queue is excluded. Failures release capacity but do not contribute latency or throughput. Each snapshot contains its time bounds, successful count, minimum and average latency, configured latency percentile, successful throughput per second, and maximum observed in-flight work. Minimum and average latency describe every successful completion in the bucket, while percentile samples are explicitly bounded.
+
+Latency and priority percentiles use Type 7 linear interpolation and truncate the interpolated result toward zero. The implementation uses integer arithmetic for interpolation so the result remains deterministic across native and WebAssembly targets. Priority samples form an independent bounded rolling window and include normal submissions even when threshold admission or queue capacity rejects them; submissions after shutdown are excluded.
+
+Statistics configuration defines minimum and maximum bucket durations, publication and percentile sample thresholds, a sample-memory bound, and the latency percentile. Invalid ranges are rejected. `next_deadline` returns the earliest queue or statistics deadline, allowing the host to rotate a low-throughput bucket without a core-owned timer. Published floating-point averages and throughput values are constructed only from finite integer values and a non-zero duration.
 
 The PID controller uses observed queue and execution activity to adjust an admission percentage. An auto-tuner uses latency and throughput feedback to update concurrency and target latency. Invalid or non-finite values must not be allowed to corrupt controller state.
 
@@ -327,3 +335,9 @@ Controller
 ```
 
 Statistics, PID feedback, adaptive timeouts, automatic tuning, WebAssembly interfaces, and host adapters are deliberately deferred until this state-machine boundary is covered by conformance scenarios.
+
+### Second implementation iteration
+
+The second iteration adds bounded priority and latency samples, host-driven execution windows, published statistics snapshots, and observed in-flight tracking. The scheduler retains each active request's start timestamp so successful service latency excludes queue waiting time. The controller exposes the latest published snapshot and cumulative priority percentiles, and its next deadline now includes statistics-window rotation.
+
+PID feedback, adaptive timeouts, and automatic concurrency and latency tuning remain deferred. This keeps the measurement contract independently testable before statistics begin changing admission or capacity decisions.

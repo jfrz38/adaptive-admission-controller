@@ -1,9 +1,10 @@
 use crate::admission::AdmissionController;
 use crate::priority_queue::PriorityQueue;
 use crate::scheduler::Scheduler;
+use crate::statistics::Statistics;
 use crate::{
     Action, CancellationReason, Config, ConfigError, ControllerError, EvictionReason, Outcome,
-    Priority, RejectionReason, RequestId, Submission, Timestamp,
+    Priority, RejectionReason, RequestId, StatisticsSnapshot, Submission, Timestamp,
 };
 
 /// Deterministic admission-control state machine.
@@ -11,6 +12,7 @@ pub struct Controller {
     admission: AdmissionController,
     scheduler: Scheduler,
     queue: PriorityQueue,
+    statistics: Statistics,
     next_request_id: u64,
     current_time: Option<Timestamp>,
     shutdown: bool,
@@ -24,6 +26,7 @@ impl Controller {
             admission: AdmissionController::new(config.initial_threshold),
             scheduler: Scheduler::new(config.max_concurrent_requests),
             queue: PriorityQueue::new(config.max_queued_requests, config.queue_timeout_ms),
+            statistics: Statistics::new(config.statistics),
             next_request_id: 0,
             current_time: None,
             shutdown: false,
@@ -45,18 +48,23 @@ impl Controller {
                 request_id,
                 reason: RejectionReason::Shutdown,
             });
-        } else if let Some(reason) = self.admission.rejection_reason(priority) {
-            actions.push(Action::Reject { request_id, reason });
-        } else if self.scheduler.has_capacity() {
-            self.scheduler.start(request_id);
-            actions.push(Action::Start { request_id });
-        } else if self.queue.is_full() {
-            actions.push(Action::Reject {
-                request_id,
-                reason: RejectionReason::QueueFull,
-            });
         } else {
-            self.queue.push(request_id, priority, now)?;
+            self.statistics.record_priority(priority);
+            if let Some(reason) = self.admission.rejection_reason(priority) {
+                actions.push(Action::Reject { request_id, reason });
+            } else if self.scheduler.has_capacity() {
+                self.scheduler.start(request_id, now);
+                self.statistics
+                    .observe_in_flight(self.scheduler.active_count());
+                actions.push(Action::Start { request_id });
+            } else if self.queue.is_full() {
+                actions.push(Action::Reject {
+                    request_id,
+                    reason: RejectionReason::QueueFull,
+                });
+            } else {
+                self.queue.push(request_id, priority, now)?;
+            }
         }
 
         Ok(Submission {
@@ -69,7 +77,7 @@ impl Controller {
     pub fn complete(
         &mut self,
         request_id: RequestId,
-        _outcome: Outcome,
+        outcome: Outcome,
         now: Timestamp,
     ) -> Result<Vec<Action>, ControllerError> {
         self.validate_time(now)?;
@@ -86,8 +94,13 @@ impl Controller {
         }
 
         let mut actions = self.advance_to(now);
-        self.scheduler.complete(request_id);
-        self.fill_capacity(&mut actions);
+        let started_at = self.scheduler.complete(request_id);
+        if outcome == Outcome::Success {
+            let latency_ms = now.as_millis() - started_at.as_millis();
+            self.statistics
+                .record_success(latency_ms, now, self.scheduler.active_count());
+        }
+        self.fill_capacity(&mut actions, now);
         Ok(actions)
     }
 
@@ -146,7 +159,29 @@ impl Controller {
 
     /// Returns the next instant at which the host should call [`Self::advance_time`].
     pub fn next_deadline(&mut self) -> Option<Timestamp> {
-        self.queue.next_deadline()
+        let queue_deadline = self.queue.next_deadline();
+        let statistics_deadline = (!self.shutdown || self.scheduler.active_count() > 0)
+            .then(|| self.statistics.next_deadline())
+            .flatten();
+        match (queue_deadline, statistics_deadline) {
+            (Some(queue), Some(statistics)) => Some(queue.min(statistics)),
+            (Some(queue), None) => Some(queue),
+            (None, Some(statistics)) => Some(statistics),
+            (None, None) => None,
+        }
+    }
+
+    /// Returns the most recently published execution statistics, if any.
+    pub fn latest_statistics(&self) -> Option<&StatisticsSnapshot> {
+        self.statistics.latest_snapshot()
+    }
+
+    /// Calculates a cumulative percentile over recent submitted priorities.
+    ///
+    /// Returns `None` when the percentile is outside `0..=100` or too few requests have been
+    /// observed.
+    pub fn priority_percentile(&self, percentile: u8) -> Option<u16> {
+        self.statistics.priority_percentile(percentile)
     }
 
     fn validate_time(&self, now: Timestamp) -> Result<(), ControllerError> {
@@ -163,6 +198,8 @@ impl Controller {
 
     fn advance_to(&mut self, now: Timestamp) -> Vec<Action> {
         self.current_time = Some(now);
+        self.statistics
+            .advance_to(now, self.scheduler.active_count());
         self.queue
             .expire(now)
             .into_iter()
@@ -181,7 +218,7 @@ impl Controller {
         Ok(RequestId::new(value))
     }
 
-    fn fill_capacity(&mut self, actions: &mut Vec<Action>) {
+    fn fill_capacity(&mut self, actions: &mut Vec<Action>, now: Timestamp) {
         if self.shutdown {
             return;
         }
@@ -189,7 +226,9 @@ impl Controller {
             let Some(request_id) = self.queue.pop_next() else {
                 break;
             };
-            self.scheduler.start(request_id);
+            self.scheduler.start(request_id, now);
+            self.statistics
+                .observe_in_flight(self.scheduler.active_count());
             actions.push(Action::Start { request_id });
         }
     }

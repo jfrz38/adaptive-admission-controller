@@ -9,6 +9,12 @@ pub enum ConfigError {
     ThresholdOutOfRange { value: u16 },
     ZeroConcurrency,
     ZeroQueueTimeout,
+    ZeroStatisticsMinWindow,
+    StatisticsWindowOrder { minimum_ms: u64, maximum_ms: u64 },
+    ZeroStatisticsMinSamples,
+    ZeroStatisticsPercentileSamples,
+    StatisticsSampleLimitTooSmall { maximum: usize, required: usize },
+    StatisticsPercentileOutOfRange { value: u8 },
 }
 
 impl Display for ConfigError {
@@ -19,6 +25,39 @@ impl Display for ConfigError {
             }
             Self::ZeroConcurrency => write!(formatter, "max concurrency must be greater than zero"),
             Self::ZeroQueueTimeout => write!(formatter, "queue timeout must be greater than zero"),
+            Self::ZeroStatisticsMinWindow => {
+                write!(
+                    formatter,
+                    "statistics minimum window must be greater than zero"
+                )
+            }
+            Self::StatisticsWindowOrder {
+                minimum_ms,
+                maximum_ms,
+            } => write!(
+                formatter,
+                "statistics maximum window {maximum_ms} ms is shorter than minimum window {minimum_ms} ms"
+            ),
+            Self::ZeroStatisticsMinSamples => {
+                write!(
+                    formatter,
+                    "statistics minimum samples must be greater than zero"
+                )
+            }
+            Self::ZeroStatisticsPercentileSamples => write!(
+                formatter,
+                "statistics minimum percentile samples must be greater than zero"
+            ),
+            Self::StatisticsSampleLimitTooSmall { maximum, required } => write!(
+                formatter,
+                "statistics sample limit {maximum} is smaller than required sample count {required}"
+            ),
+            Self::StatisticsPercentileOutOfRange { value } => {
+                write!(
+                    formatter,
+                    "statistics percentile {value} is outside 0..=100"
+                )
+            }
         }
     }
 }
