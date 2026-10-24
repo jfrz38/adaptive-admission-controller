@@ -377,3 +377,11 @@ Automatic concurrency and target-latency tuning remain deferred so that timeout 
 The fifth iteration adds automatic concurrency and target-latency tuning driven by published execution snapshots. The configured `max_concurrent_requests` value becomes the initial capacity. A focused auto-tuner maintains bounded throughput/concurrency history, filters percentile latency, adapts the latency target, and updates scheduler capacity without owning timers or executing work.
 
 Concurrency and latency checks use independent host-driven deadlines and process each snapshot once per loop. Capacity changes produce `ConcurrencyChanged { previous, current }`. A decrease does not cancel active requests and takes effect as work completes; an increase fills available slots from the priority queue after same-timestamp expirations. This completes the adaptive core before adding WebAssembly interfaces and host adapters.
+
+### Sixth implementation iteration
+
+The sixth iteration adds `adaptive-admission-component`, a WebAssembly Component Model boundary described by WIT. It is compiled through the capability-free `wasm32-unknown-unknown` target and converted to a component, avoiding ambient WASI imports. Each exported `admission-controller` resource owns one independent core `Controller`. Its methods mirror the synchronous state-machine operations and expose deadlines and published statistics without importing clocks, timers, randomness, I/O, callbacks, logging, or asynchronous execution.
+
+Configuration, actions, snapshots, outcomes, and errors cross the component boundary as explicit structured values. WIT uses fixed-width integers; values representing Rust collection bounds are checked before conversion to `usize`. Request IDs returned by `submit` are opaque host-held values that can be passed back to `complete` and `cancel`; the core remains responsible for rejecting unknown IDs and illegal transitions.
+
+The component uses generated bindings only in the integration crate, keeping `adaptive-admission-core` free of WebAssembly dependencies. Componentizing the compiled module produces a self-describing artifact whose only public surface is the exported controller interface. Host-language convenience APIs, Promise or future management, and gateway-specific lifecycle behavior remain adapter responsibilities for later iterations.
