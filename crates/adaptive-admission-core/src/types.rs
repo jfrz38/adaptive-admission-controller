@@ -273,6 +273,10 @@ pub enum Action {
         previous: u16,
         current: u16,
     },
+    ConcurrencyChanged {
+        previous: usize,
+        current: usize,
+    },
     Start {
         request_id: RequestId,
     },

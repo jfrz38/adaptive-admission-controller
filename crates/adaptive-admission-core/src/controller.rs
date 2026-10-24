@@ -1,4 +1,5 @@
 use crate::admission::AdmissionController;
+use crate::auto_tuning::AutoTuner;
 use crate::pid::{PidController, PidObservation};
 use crate::priority_queue::PriorityQueue;
 use crate::queue_timeout::QueueTimeoutController;
@@ -17,6 +18,7 @@ pub struct Controller {
     queue_timeout: QueueTimeoutController,
     statistics: Statistics,
     pid: PidController,
+    auto_tuner: AutoTuner,
     maximum_threshold: u16,
     next_request_id: u64,
     current_time: Option<Timestamp>,
@@ -34,6 +36,7 @@ impl Controller {
             queue_timeout: QueueTimeoutController::new(config.queue_timeout_ratio),
             statistics: Statistics::new(config.statistics),
             pid: PidController::new(config.pid),
+            auto_tuner: AutoTuner::new(),
             maximum_threshold: config.initial_threshold,
             next_request_id: 0,
             current_time: None,
@@ -173,10 +176,18 @@ impl Controller {
             .then(|| self.statistics.next_deadline())
             .flatten();
         let pid_deadline = (!self.shutdown).then(|| self.pid.next_deadline()).flatten();
-        [queue_deadline, statistics_deadline, pid_deadline]
-            .into_iter()
-            .flatten()
-            .min()
+        let auto_tuning_deadline = (!self.shutdown)
+            .then(|| self.auto_tuner.next_deadline())
+            .flatten();
+        [
+            queue_deadline,
+            statistics_deadline,
+            pid_deadline,
+            auto_tuning_deadline,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Returns the most recently published execution statistics, if any.
@@ -247,6 +258,18 @@ impl Controller {
                     reason: EvictionReason::QueueTimeout,
                 }),
         );
+        if !self.shutdown
+            && let Some(current) = self.auto_tuner.advance(
+                now,
+                self.statistics.latest_snapshot(),
+                self.scheduler.capacity(),
+            )
+        {
+            let previous = self.scheduler.capacity();
+            self.scheduler.update_capacity(current);
+            actions.push(Action::ConcurrencyChanged { previous, current });
+            self.fill_capacity(&mut actions, now);
+        }
         actions
     }
 

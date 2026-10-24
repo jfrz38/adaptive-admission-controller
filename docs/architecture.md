@@ -119,7 +119,7 @@ Reject(request_id, reason)
 Evict(request_id, reason)
 Cancel(request_id)
 ThresholdChanged(value)
-ConcurrencyChanged(value)
+ConcurrencyChanged(previous, current)
 ```
 
 For example, an adapter stores `request_id -> host task`, executes a task after receiving `Start`, and calls `complete` when that task settles. This avoids passing language-specific closures or return values through the WebAssembly boundary.
@@ -202,7 +202,7 @@ Successful execution latency is measured from the emitted `Start` action to the 
 
 Latency and priority percentiles use Type 7 linear interpolation and truncate the interpolated result toward zero. The implementation uses integer arithmetic for interpolation so the result remains deterministic across native and WebAssembly targets. Priority samples form an independent bounded rolling window and include normal submissions even when threshold admission or queue capacity rejects them; submissions after shutdown are excluded.
 
-Statistics configuration defines minimum and maximum bucket durations, publication and percentile sample thresholds, a sample-memory bound, and the latency percentile. Invalid ranges are rejected. `next_deadline` returns the earliest queue, statistics, or PID deadline, allowing the host to drive every time-based transition without a core-owned timer. Published floating-point averages and throughput values are constructed only from finite integer values and a non-zero duration.
+Statistics configuration defines minimum and maximum bucket durations, publication and percentile sample thresholds, a sample-memory bound, and the latency percentile. Invalid ranges are rejected. `next_deadline` returns the earliest queue, statistics, PID, or auto-tuning deadline, allowing the host to drive every time-based transition without a core-owned timer. Published floating-point averages and throughput values are constructed only from finite integer values and a non-zero duration.
 
 The PID controller uses queue entries, queue exits, active work, and free execution capacity to adjust an admission percentage in the inclusive range `0..=100`. Positive pressure reduces admission, while spare capacity recovers it. Each update is bounded by a configured maximum delta. The integral term decays during recovery and is not accumulated when doing so would push an already saturated output farther outside its range.
 
@@ -212,7 +212,13 @@ The resulting percentage is converted to an exclusive priority threshold. When t
 
 Published average latency also adapts the timeout assigned to new queue entries. The configured timeout is the initial fallback; after each newly published snapshot, the controller rounds `average latency * timeout ratio` to milliseconds and adopts a positive finite result. Requests already queued retain their original deadlines, and discarded statistics windows do not change the timeout.
 
-An auto-tuner will use latency and throughput feedback to update concurrency and target latency in a later iteration. Invalid or non-finite values must not be allowed to corrupt controller state.
+The auto-tuner uses published percentile latency, minimum latency, throughput, and observed in-flight work to update concurrency and target latency. Invalid or non-finite values must not be allowed to corrupt controller state.
+
+Concurrency tuning is checked every two seconds and target-latency tuning every ten seconds. These are host-driven deadlines: a late wake-up performs one update and schedules the next deadline from the supplied timestamp rather than replaying missed intervals. Each controller consumes a published statistics snapshot at most once for each tuning loop.
+
+Percentile latency is filtered through the lower median of the latest five samples and an exponential moving average weighted 80% toward the previous filtered value. The concurrency controller compares this value with the current target, changes capacity gradually, never drops below one, and bounds growth to ten times the in-flight work observed in the same statistics window. Lowering capacity never interrupts active work. Increasing capacity can immediately emit `Start` actions after elapsed queue deadlines have been processed.
+
+Target latency starts at 100 ms. During a ten-sample warm-up it follows the latest positive minimum latency. Afterwards, the covariance between bounded in-flight and throughput history determines whether the target moves toward minimum latency, decreases, or remains unchanged. Three consecutive tuned windows at concurrency one recalibrate the target from observed latency and probe concurrency two. Histories and latency samples are explicitly bounded.
 
 ## Randomness
 
@@ -365,3 +371,9 @@ The fourth iteration adds adaptive queue timeouts driven by published execution 
 Timeout updates apply only to requests queued afterward. Existing requests retain the deadline assigned at submission, preserving deterministic expiration without rebuilding the deadline heap. No independent timeout-update deadline is introduced because recalculation without a new statistics snapshot cannot produce new information.
 
 Automatic concurrency and target-latency tuning remain deferred so that timeout adaptation can be verified while execution capacity stays fixed.
+
+### Fifth implementation iteration
+
+The fifth iteration adds automatic concurrency and target-latency tuning driven by published execution snapshots. The configured `max_concurrent_requests` value becomes the initial capacity. A focused auto-tuner maintains bounded throughput/concurrency history, filters percentile latency, adapts the latency target, and updates scheduler capacity without owning timers or executing work.
+
+Concurrency and latency checks use independent host-driven deadlines and process each snapshot once per loop. Capacity changes produce `ConcurrencyChanged { previous, current }`. A decrease does not cancel active requests and takes effect as work completes; an increase fills available slots from the priority queue after same-timestamp expirations. This completes the adaptive core before adding WebAssembly interfaces and host adapters.
