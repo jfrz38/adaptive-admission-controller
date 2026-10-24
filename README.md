@@ -23,6 +23,21 @@ See [Architecture and project scope](docs/architecture.md) for:
 - WebAssembly and gateway integration strategy.
 - Behavioral guarantees and implementation approach.
 
+## Current status
+
+The first implementation iteration provides the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, and shutdown. Statistics, PID feedback, automatic tuning, WebAssembly interfaces, and host adapters are planned subsequent increments.
+
+## Development
+
+The repository pins its Rust toolchain. Validate the workspace with:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets
+cargo doc --workspace --no-deps
+```
+
 ## License
 
 Distributed under the [MIT License](LICENSE).
