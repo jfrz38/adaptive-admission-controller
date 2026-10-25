@@ -6,7 +6,9 @@ GitHub Releases distribute the portable artifacts consumed by external language 
 
 `workspace.package.version` in the root `Cargo.toml` is the release version. Both crates inherit it, and the package declaration in `crates/adaptive-admission-component/wit/world.wit` must use the same version.
 
-Update both sources in a pull request before merging a new release to `main`. `make version-check` rejects mismatches, and release automation refuses to overwrite an existing `v<version>` tag.
+Run the `Bump Version` workflow and choose a patch, minor, or major increment to prepare a release. It uses `auto-version-bump-action` to update the workspace version, synchronize WIT and `Cargo.lock`, and open a draft pull request against `develop`. Marking that pull request ready for review triggers the normal CI checks. The repository setting **Allow GitHub Actions to create and approve pull requests** must be enabled.
+
+For a manual change, update `workspace.package.version` and run `make sync-version`. `make version-check` rejects mismatches, and release automation refuses to overwrite an existing `v<version>` tag.
 
 ## Validation
 
@@ -15,7 +17,7 @@ Pull requests targeting `develop` or `main` run:
 - `make check` for formatting, Clippy, tests, and documentation.
 - `make component` for the release-target build, component conversion, and component validation.
 
-Pull requests targeting `main` additionally verify that the proposed version has no existing tag. Branch protection should require these checks before merge.
+Pull requests targeting `main` additionally use `check-version-change` to require a new, increasing SemVer version and verify that the proposed version has no existing tag or release. Branch protection should require these checks before merge.
 
 To reproduce the complete validation locally:
 
@@ -29,7 +31,7 @@ make component
 
 Every push to `main` is treated as release intent. The release workflow:
 
-1. Runs all required Rust checks.
+1. Runs all required Rust checks and verifies that the version increased from the previous `main` commit.
 2. Builds and validates the distribution with read-only repository permissions.
 3. Transfers those exact assets to an isolated publication job.
 4. Creates `v<version>` on the validated commit and publishes the GitHub Release.

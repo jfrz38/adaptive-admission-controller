@@ -28,9 +28,14 @@ doc: ## Build workspace documentation with warnings denied
 
 check: fmt-check lint test doc ## Run all required Rust checks
 
-.PHONY: version-check install-wasm-tools wasm-tools-check component dist
+.PHONY: version-check sync-version install-wasm-tools wasm-tools-check component dist
 version-check: ## Verify that Cargo and WIT versions agree
 	@sh scripts/release-version.sh
+
+sync-version: ## Synchronize WIT and Cargo.lock with the workspace version
+	@sh scripts/sync-wit-version.sh
+	cargo check --workspace
+	@$(MAKE) version-check
 
 install-wasm-tools: ## Install the pinned wasm-tools release
 	cargo install wasm-tools --version "=$(WASM_TOOLS_VERSION)" --locked
