@@ -23,9 +23,12 @@ See [Architecture and project scope](docs/architecture.md) for:
 - WebAssembly and gateway integration strategy.
 - Behavioral guarantees and implementation approach.
 
+See [Host adapter contract](docs/host-adapters.md) when embedding the released component in a
+language runtime or gateway.
+
 ## Current status
 
-The first eight implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, PID feedback that adapts the priority threshold, queue timeouts adapted from published execution latency, and automatic concurrency and target-latency tuning. The `adaptive-admission-component` crate exposes that state machine as a synchronous WebAssembly Component Model resource described with WIT. Language-neutral JSON [conformance scenarios](conformance/README.md) specify the observable contract shared by embeddings. CI validates the workspace and component boundary, while tagged GitHub Releases distribute the component, WIT contract, conformance scenarios, and checksums.
+The first nine implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, PID feedback that adapts the priority threshold, queue timeouts adapted from published execution latency, and automatic concurrency and target-latency tuning. The `adaptive-admission-component` crate exposes that state machine as a synchronous WebAssembly Component Model resource described with WIT. Language-neutral JSON [conformance scenarios](conformance/README.md) specify the observable contract shared by embeddings, and the first separately distributed Node.js host validates those scenarios against the released component. CI validates the workspace and component boundary, while tagged GitHub Releases distribute the component, WIT contract, conformance scenarios, and checksums.
 
 This repository contains the portable Rust core, its WebAssembly component boundary, and the conformance contract. Host-language packages and gateway adapters are separate consumers and are developed and distributed independently.
 

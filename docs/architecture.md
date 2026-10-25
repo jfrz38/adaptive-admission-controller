@@ -402,3 +402,17 @@ The eighth iteration makes the existing component and conformance contract consu
 A merge to `main` declares a release candidate. After all checks pass, automation builds the component once and publishes a GitHub Release whose tag matches the workspace version. The release contains the validated component, its WIT contract, the language-neutral conformance bundle, and checksums. Publication has narrowly scoped write permission and promotes the exact assets produced by the read-only build job rather than recompiling them.
 
 Language packages and gateway integrations remain outside this repository. They consume a tagged component and conformance version and own their platform-specific execution, lifecycle, and packaging concerns.
+
+### Ninth implementation iteration
+
+The ninth iteration validates the distribution through the first real host-language consumer. An
+official Node.js package consumes the tagged component, generates bindings with a pinned `jco`
+toolchain, drives deadlines from a monotonic host clock, retains tasks by request ID, and presents an
+idiomatic Promise-based API. It executes the language-neutral conformance scenarios against the final
+WebAssembly artifact and adds host-only tests for promises, re-entrancy, timers, packaging, and
+wasm32 representation limits.
+
+The Node package remains a separately distributed consumer so JavaScript build and release concerns
+do not enter the Rust workspace. Express and NestJS integrations remain a later layer over that
+package. The protocol every language host must implement is defined in
+[`host-adapters.md`](host-adapters.md).

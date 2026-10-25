@@ -298,7 +298,7 @@
             "statistics-window-order", "zero-statistics-min-samples",
             "zero-statistics-percentile-samples", "statistics-sample-limit-too-small",
             "statistics-percentile-out-of-range", "invalid-pid-gain", "zero-pid-interval",
-            "pid-delta-out-of-range", "pid-decay-out-of-range"
+            "pid-delta-out-of-range", "pid-decay-out-of-range", "numeric-overflow"
           ]
         },
         "value": { "type": "integer" },
@@ -306,7 +306,8 @@
         "maximumMs": { "$ref": "#/$defs/u64" },
         "maximum": { "type": "integer", "minimum": 0 },
         "required": { "type": "integer", "minimum": 0 },
-        "name": { "type": "string" }
+        "name": { "type": "string" },
+        "field": { "type": "string" }
       }
     },
     "request": {
