@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run required checks
+        run: make check
+
+  component:
+    name: WebAssembly component
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install wasm-tools
+        run: make install-wasm-tools
+      - name: Build and validate component
+        run: make component
+
+  release-preflight:
+    name: Release preflight
+    if: github.base_ref == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify release version is unused
+        shell: bash
+        run: |
+          version=$(sh scripts/release-version.sh)
+          tag="v${version}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; bump the workspace and WIT versions." >&2
+            exit 1
+          fi
+          if gh api --silent "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}"; then
+            echo "Tag ${tag} already exists; bump the workspace and WIT versions." >&2
+            exit 1
+          fi
