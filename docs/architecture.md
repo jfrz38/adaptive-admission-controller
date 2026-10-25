@@ -394,3 +394,11 @@ The seventh iteration publishes language-neutral JSON conformance scenarios for 
 A Rust test runner executes every fixture against `adaptive-admission-core`. Serialization remains test-only so the core keeps its zero-production-dependency policy. Rust-native tests continue to cover non-finite numbers, integer limits, and implementation details that JSON cannot represent.
 
 The fixtures are intended for reuse by separately distributed language and gateway adapters. This repository remains scoped to the Rust core, its portable WebAssembly component boundary, and the shared conformance contract; it does not contain npm or other host-language adapter packages.
+
+### Eighth implementation iteration
+
+The eighth iteration makes the existing component and conformance contract consumable as a versioned distribution without adding host-language adapters. The workspace package version is the release source of truth and must remain synchronized with the WIT package version. Pull requests validate the Rust workspace and the final WebAssembly component through the same Makefile targets used locally.
+
+A merge to `main` declares a release candidate. After all checks pass, automation builds the component once and publishes a GitHub Release whose tag matches the workspace version. The release contains the validated component, its WIT contract, the language-neutral conformance bundle, and checksums. Publication has narrowly scoped write permission and promotes the exact assets produced by the read-only build job rather than recompiling them.
+
+Language packages and gateway integrations remain outside this repository. They consume a tagged component and conformance version and own their platform-specific execution, lifecycle, and packaging concerns.

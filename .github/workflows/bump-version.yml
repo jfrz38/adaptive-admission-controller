@@ -1,0 +1,47 @@
+name: Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: SemVer component to increment
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: bump-version
+  cancel-in-progress: false
+
+jobs:
+  bump-version:
+    name: Prepare version bump
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out develop
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: develop
+          fetch-depth: 0
+      - name: Create version bump pull request
+        uses: jfrz38/auto-version-bump-action@72e195a978a7b6b433b39bfef52d335b6fe609b6 # v0.3.0
+        with:
+          bump: ${{ inputs.bump }}
+          strategy: regex
+          version-file: Cargo.toml
+          version-pattern: '^version\s*=\s*"(\d+\.\d+\.\d+)"'
+          version-replacement: 'version = "{version}"'
+          base-branch: develop
+          github-token: ${{ github.token }}
+          commit-message: 'chore: bump version to {next-version}'
+          pr-title: 'chore: bump version to {next-version}'
+          pr-body: 'Bumps Adaptive Admission Controller from {current-version} to {next-version} using a {bump} release bump.'
+          pre-commit-commands: make sync-version
