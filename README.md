@@ -25,7 +25,9 @@ See [Architecture and project scope](docs/architecture.md) for:
 
 ## Current status
 
-The first six implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, PID feedback that adapts the priority threshold, queue timeouts adapted from published execution latency, and automatic concurrency and target-latency tuning. The `adaptive-admission-component` crate exposes that state machine as a synchronous WebAssembly Component Model resource described with WIT. Host-language and gateway adapters remain subsequent increments.
+The first seven implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, PID feedback that adapts the priority threshold, queue timeouts adapted from published execution latency, and automatic concurrency and target-latency tuning. The `adaptive-admission-component` crate exposes that state machine as a synchronous WebAssembly Component Model resource described with WIT. Language-neutral JSON [conformance scenarios](conformance/README.md) specify the observable contract shared by embeddings.
+
+This repository contains the portable Rust core, its WebAssembly component boundary, and the conformance contract. Host-language packages and gateway adapters are separate consumers and are developed and distributed independently.
 
 ## Development
 
@@ -39,6 +41,12 @@ cargo doc --workspace --no-deps
 cargo build -p adaptive-admission-component --target wasm32-unknown-unknown --release
 wasm-tools component new target/wasm32-unknown-unknown/release/adaptive_admission_component.wasm \
   -o target/wasm32-unknown-unknown/release/adaptive_admission_component.component.wasm
+```
+
+Run only the shared conformance contract with:
+
+```bash
+cargo test -p adaptive-admission-core --test conformance
 ```
 
 The final component artifact is written to

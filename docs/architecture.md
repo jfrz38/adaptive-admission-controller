@@ -329,9 +329,10 @@ A low-risk implementation sequence is:
 2. Implement the host-independent Rust state machine.
 3. Run cross-implementation conformance tests.
 4. Compile the stable core to WebAssembly.
-5. Build a Node.js adapter that reconstructs an idiomatic Promise-based API.
-6. Validate one concrete gateway, including pause/resume, timers, worker scope, memory, reload, and shutdown.
-7. Add integrations only after distinguishing common guarantees from host-specific behavior.
+5. Publish language-neutral conformance fixtures for independent host implementations.
+6. Build language adapters, such as an idiomatic Promise-based Node.js package, in their own packages or repositories.
+7. Validate one concrete gateway, including pause/resume, timers, worker scope, memory, reload, and shutdown.
+8. Add integrations only after distinguishing common guarantees from host-specific behavior.
 
 This sequence validates the architecture before committing to a gateway ABI and keeps portability concerns out of the control algorithm.
 
@@ -385,3 +386,11 @@ The sixth iteration adds `adaptive-admission-component`, a WebAssembly Component
 Configuration, actions, snapshots, outcomes, and errors cross the component boundary as explicit structured values. WIT uses fixed-width integers; values representing Rust collection bounds are checked before conversion to `usize`. Request IDs returned by `submit` are opaque host-held values that can be passed back to `complete` and `cancel`; the core remains responsible for rejecting unknown IDs and illegal transitions.
 
 The component uses generated bindings only in the integration crate, keeping `adaptive-admission-core` free of WebAssembly dependencies. Componentizing the compiled module produces a self-describing artifact whose only public surface is the exported controller interface. Host-language convenience APIs, Promise or future management, and gateway-specific lifecycle behavior remain adapter responsibilities for later iterations.
+
+### Seventh implementation iteration
+
+The seventh iteration publishes language-neutral JSON conformance scenarios for the observable state-machine contract. Each fixture defines controller configuration, an ordered trace of timestamped operations, and the exact actions, errors, deadlines, statistics, or percentiles expected at each step. Request aliases let fixtures refer to opaque controller-generated IDs without adopting a language-specific representation.
+
+A Rust test runner executes every fixture against `adaptive-admission-core`. Serialization remains test-only so the core keeps its zero-production-dependency policy. Rust-native tests continue to cover non-finite numbers, integer limits, and implementation details that JSON cannot represent.
+
+The fixtures are intended for reuse by separately distributed language and gateway adapters. This repository remains scoped to the Rust core, its portable WebAssembly component boundary, and the shared conformance contract; it does not contain npm or other host-language adapter packages.
