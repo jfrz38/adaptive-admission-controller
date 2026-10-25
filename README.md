@@ -25,7 +25,7 @@ See [Architecture and project scope](docs/architecture.md) for:
 
 ## Current status
 
-The first five implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, PID feedback that adapts the priority threshold, queue timeouts adapted from published execution latency, and automatic concurrency and target-latency tuning. WebAssembly interfaces and host adapters are planned subsequent increments.
+The first six implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, PID feedback that adapts the priority threshold, queue timeouts adapted from published execution latency, and automatic concurrency and target-latency tuning. The `adaptive-admission-component` crate exposes that state machine as a synchronous WebAssembly Component Model resource described with WIT. Host-language and gateway adapters remain subsequent increments.
 
 ## Development
 
@@ -36,7 +36,16 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets
 cargo doc --workspace --no-deps
+cargo build -p adaptive-admission-component --target wasm32-unknown-unknown --release
+wasm-tools component new target/wasm32-unknown-unknown/release/adaptive_admission_component.wasm \
+  -o target/wasm32-unknown-unknown/release/adaptive_admission_component.component.wasm
 ```
+
+The final component artifact is written to
+`target/wasm32-unknown-unknown/release/adaptive_admission_component.component.wasm`. The
+componentization step requires `wasm-tools` 1.262.0, which can also inspect the exported contract
+with `wasm-tools component wit <artifact>`. Building for the capability-free target avoids adding
+ambient WASI clock, random, or I/O imports to the component.
 
 ## License
 

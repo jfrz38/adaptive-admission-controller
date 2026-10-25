@@ -5,12 +5,17 @@ use crate::error::{ConfigError, PriorityError};
 pub struct RequestId(u64);
 
 impl RequestId {
+    /// Reconstructs an identifier previously returned to an embedding host.
+    pub const fn from_value(value: u64) -> Self {
+        Self(value)
+    }
+
     pub const fn value(self) -> u64 {
         self.0
     }
 
     pub(crate) const fn new(value: u64) -> Self {
-        Self(value)
+        Self::from_value(value)
     }
 }
 
