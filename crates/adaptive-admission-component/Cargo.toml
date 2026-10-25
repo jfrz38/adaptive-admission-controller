@@ -1,0 +1,15 @@
+[package]
+name = "adaptive-admission-component"
+version.workspace = true
+description = "WebAssembly Component Model interface for adaptive admission control"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+adaptive-admission-core = { path = "../adaptive-admission-core" }
+wit-bindgen = "=0.63.0"
