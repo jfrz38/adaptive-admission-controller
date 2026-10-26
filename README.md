@@ -68,7 +68,8 @@ cargo test -p adaptive-admission-core --test conformance
 ## Releases
 
 A merge to `main` creates a GitHub Release after the complete workspace and component validations
-pass. The workspace version and WIT package version identify the release. See
+pass. A manual publication workflow can then promote the exact released component to GHCR without
+rebuilding it. The workspace version and WIT package version identify the release. See
 [`docs/releasing.md`](docs/releasing.md) for the release process and asset contract.
 
 ## License

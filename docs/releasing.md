@@ -1,6 +1,9 @@
 # Release process
 
-GitHub Releases distribute the portable artifacts consumed by external language packages and gateway adapters. This repository does not publish those adapters or publish its crates to crates.io.
+GitHub Releases distribute the portable artifacts consumed by external language packages and
+gateway adapters. A separate manual workflow promotes a validated release component to the GitHub
+Container Registry (GHCR). This repository does not publish host adapters or currently publish its
+crates to crates.io.
 
 ## Version source
 
@@ -48,3 +51,36 @@ Each release contains:
 - `SHA256SUMS`: SHA-256 digests for the component, WIT, conformance archive, and release manifest.
 
 Build the same asset set locally with `make dist`. Generated files are written to `dist/`, which is ignored by Git.
+
+## WebAssembly component registry
+
+Run the `Publish Release` workflow from `main` and select `wasm-oci` to promote the component from
+the latest stable GitHub Release to:
+
+```text
+ghcr.io/jfrz38/adaptive-admission:<version>
+```
+
+The workflow verifies that the release tag belongs to `main`, validates every release checksum,
+checks the source commit and clean-tree marker in the release manifest, and transfers those exact
+assets to a job with `packages: write`. The privileged job never rebuilds the component.
+
+Publication is idempotent. If the version tag already exists with the expected component bytes, the
+workflow succeeds without moving it. It fails if the tag resolves to different bytes. A newly
+created GHCR package is private by default; change its visibility to public from the package settings
+only when the repository is ready for public distribution. Public packages cannot be made private
+again.
+
+Consumers can fetch a published component by version:
+
+```bash
+wkg oci pull ghcr.io/jfrz38/adaptive-admission:0.1.0 \
+  --output adaptive-admission-component.wasm
+```
+
+For a fully immutable reference, use the digest reported by the publication workflow:
+
+```bash
+wkg oci pull ghcr.io/jfrz38/adaptive-admission@sha256:<digest> \
+  --output adaptive-admission-component.wasm
+```
