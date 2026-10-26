@@ -17,6 +17,8 @@ jobs:
     name: Validate release commit
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -24,14 +26,24 @@ jobs:
           fetch-depth: 0
       - name: Run required checks
         run: make check
+      - name: Resolve previous published release
+        id: release-baseline
+        shell: bash
+        run: |
+          tag=$(sh scripts/latest-release-tag.sh)
+          if [ -n "${tag}" ]; then
+            git fetch origin "refs/tags/${tag}:refs/tags/${tag}"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Verify release version increased
+        if: steps.release-baseline.outputs.tag != ''
         uses: jfrz38/check-version-change@176c454a13e14862ec362573f26c9e9395855d0c # v1.5.0
         with:
           file-path: Cargo.toml
           file-format: raw
           version-pattern: '^version\s*=\s*"(\d+\.\d+\.\d+)"'
           compare-source: git-ref
-          compare-ref: ${{ github.event.before }}
+          compare-ref: ${{ steps.release-baseline.outputs.tag }}
           allow-missing-compare-file: true
           fail-on-unchanged: true
           fail-on-not-higher: true
