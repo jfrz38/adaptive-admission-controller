@@ -7,8 +7,11 @@ on:
         description: Registry target to publish
         required: true
         type: choice
+        default: wasm-oci
         options:
           - wasm-oci
+          - rust-crate
+          - all
 
 permissions:
   contents: read
@@ -28,6 +31,7 @@ jobs:
       sha256: ${{ steps.release.outputs.sha256 }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
+      crate-publish-required: ${{ steps.crate-policy.outputs.publish-required }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -95,7 +99,63 @@ jobs:
             echo "tag=${tag}"
             echo "version=${version}"
           } >> "${GITHUB_OUTPUT}"
+      - name: Check out selected release source
+        if: inputs.target == 'all' || inputs.target == 'rust-crate'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.release.outputs.commit }}
+          path: release-source
+          persist-credentials: false
+      - name: Prepare inherited crate version for registry comparison
+        if: inputs.target == 'all' || inputs.target == 'rust-crate'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          crate_version=$(cd release-source && sh scripts/release-version.sh)
+          test "${crate_version}" = "${RELEASE_VERSION}"
+          mkdir -p registry-check
+          cat > registry-check/Cargo.toml <<EOF
+          [package]
+          name = "adaptive-admission-core"
+          version = "${crate_version}"
+          EOF
+      - name: Compare crate version with crates.io
+        if: inputs.target == 'all' || inputs.target == 'rust-crate'
+        id: crate-version
+        uses: jfrz38/check-version-change@176c454a13e14862ec362573f26c9e9395855d0c # v1.5.0
+        with:
+          file-path: registry-check/Cargo.toml
+          package-name: adaptive-admission-core
+          compare-source: registry
+          registry: crates-io
+      - name: Decide whether the crate needs publication
+        if: inputs.target == 'all' || inputs.target == 'rust-crate'
+        id: crate-policy
+        shell: bash
+        env:
+          CHANGED: ${{ steps.crate-version.outputs.changed }}
+          COMPARED_VERSION: ${{ steps.crate-version.outputs.compared-version }}
+          IS_HIGHER: ${{ steps.crate-version.outputs.is-higher }}
+          LOCAL_VERSION: ${{ steps.crate-version.outputs.local-version }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "${LOCAL_VERSION}" = "${RELEASE_VERSION}"
+          if [ -z "${COMPARED_VERSION}" ]; then
+            echo "publish-required=true" >> "${GITHUB_OUTPUT}"
+          elif [ "${CHANGED}" = "false" ]; then
+            echo "adaptive-admission-core ${LOCAL_VERSION} is already published; nothing to do."
+            echo "publish-required=false" >> "${GITHUB_OUTPUT}"
+          elif [ "${IS_HIGHER}" = "true" ]; then
+            echo "publish-required=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Release ${LOCAL_VERSION} is not higher than crates.io version ${COMPARED_VERSION}." >&2
+            exit 1
+          fi
       - name: Preserve validated release assets
+        if: inputs.target == 'all' || inputs.target == 'wasm-oci'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: publish-release-assets
@@ -105,7 +165,7 @@ jobs:
 
   publish-wasm-oci:
     name: Publish WebAssembly component to GHCR
-    if: inputs.target == 'wasm-oci'
+    if: inputs.target == 'all' || inputs.target == 'wasm-oci'
     needs: select-release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -149,3 +209,31 @@ jobs:
             "${COMPONENT_REFERENCE}" \
             "${COMPONENT_SHA256}" \
             "${RELEASE_COMMIT}"
+
+  publish-rust-crate:
+    name: Publish Rust crate to crates.io
+    if: >-
+      (inputs.target == 'all' || inputs.target == 'rust-crate') &&
+      needs.select-release.outputs.crate-publish-required == 'true'
+    needs: select-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: crates-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out validated release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.select-release.outputs.commit }}
+          persist-credentials: false
+      - name: Validate crate package
+        run: make crate-publish-check
+      - name: Authenticate with crates.io
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      - name: Publish adaptive-admission-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+        run: cargo publish --locked --package adaptive-admission-core

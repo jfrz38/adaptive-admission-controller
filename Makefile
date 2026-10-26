@@ -11,7 +11,7 @@ COMPONENT_ARTIFACT := target/$(WASM_TARGET)/release/adaptive_admission_component
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf " \033[36m%-20s\033[0m  %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-.PHONY: fmt fmt-check lint test doc crate-package-check check
+.PHONY: fmt fmt-check lint test doc crate-package-check crate-publish-check check
 fmt: ## Format Rust sources
 	cargo fmt --all
 
@@ -29,6 +29,9 @@ doc: ## Build workspace documentation with warnings denied
 
 crate-package-check: ## Package and verify the public Rust crate without publishing it
 	cargo package --locked --allow-dirty -p adaptive-admission-core
+
+crate-publish-check: ## Run the crates.io publication checks without uploading the crate
+	cargo publish --dry-run --locked --allow-dirty -p adaptive-admission-core
 
 check: fmt-check lint test doc crate-package-check ## Run all required Rust checks
 
