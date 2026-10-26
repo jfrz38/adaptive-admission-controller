@@ -6,8 +6,9 @@ use crate::queue_timeout::QueueTimeoutController;
 use crate::scheduler::Scheduler;
 use crate::statistics::Statistics;
 use crate::{
-    Action, CancellationReason, Config, ConfigError, ControllerError, EvictionReason, Outcome,
-    Priority, RejectionReason, RequestId, StatisticsSnapshot, Submission, Timestamp,
+    Action, CancellationReason, Config, ConfigError, ControllerDiagnostics, ControllerError,
+    EvictionReason, Outcome, Priority, RejectionReason, RequestId, StatisticsSnapshot, Submission,
+    Timestamp,
 };
 
 /// Deterministic admission-control state machine.
@@ -193,6 +194,17 @@ impl Controller {
     /// Returns the most recently published execution statistics, if any.
     pub fn latest_statistics(&self) -> Option<&StatisticsSnapshot> {
         self.statistics.latest_snapshot()
+    }
+
+    /// Returns current operational values without mutating controller state.
+    pub fn diagnostics(&self) -> ControllerDiagnostics {
+        ControllerDiagnostics {
+            threshold: self.admission.threshold(),
+            concurrency_limit: self.scheduler.capacity(),
+            queue_timeout_ms: self.queue.timeout_ms(),
+            target_latency_ms: self.auto_tuner.target_latency_ms(),
+            aggregated_latency_ms: self.auto_tuner.aggregated_latency_ms(),
+        }
     }
 
     /// Calculates a cumulative percentile over recent submitted priorities.

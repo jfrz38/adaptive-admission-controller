@@ -30,6 +30,7 @@ mod types;
 pub use controller::Controller;
 pub use error::{ConfigError, ControllerError, PriorityError};
 pub use types::{
-    Action, CancellationReason, Config, EvictionReason, Outcome, PidConfig, Priority,
-    RejectionReason, RequestId, StatisticsConfig, StatisticsSnapshot, Submission, Timestamp,
+    Action, CancellationReason, Config, ControllerDiagnostics, EvictionReason, Outcome, PidConfig,
+    Priority, RejectionReason, RequestId, StatisticsConfig, StatisticsSnapshot, Submission,
+    Timestamp,
 };
