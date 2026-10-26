@@ -2,8 +2,8 @@
 
 GitHub Releases distribute the portable artifacts consumed by external language packages and
 gateway adapters. A separate manual workflow promotes a validated release component to the GitHub
-Container Registry (GHCR). This repository does not publish host adapters or currently publish its
-crates to crates.io.
+Container Registry (GHCR) and publishes the native Rust core to crates.io. This repository does not
+publish host adapters.
 
 ## Version source
 
@@ -20,7 +20,11 @@ Pull requests targeting `develop` or `main` run:
 - `make check` for formatting, Clippy, tests, and documentation.
 - `make component` for the release-target build, component conversion, and component validation.
 
-Pull requests targeting `main` additionally use `check-version-change` to require a new, increasing SemVer version and verify that the proposed version has no existing tag or release. Branch protection should require these checks before merge.
+Pull requests targeting `main` additionally use `check-version-change` to compare against the latest
+published release and verify that the proposed version has no existing tag or release. When no
+published release exists, the current workspace version is accepted as the initial version. Later
+releases must use a higher SemVer version. Branch protection should require these checks before
+merge.
 
 To reproduce the complete validation locally:
 
@@ -34,7 +38,7 @@ make component
 
 Every push to `main` is treated as release intent. The release workflow:
 
-1. Runs all required Rust checks and verifies that the version increased from the previous `main` commit.
+1. Runs all required Rust checks and verifies that the version increased from the latest published release, when one exists.
 2. Builds and validates the distribution with read-only repository permissions.
 3. Transfers those exact assets to an isolated publication job.
 4. Creates `v<version>` on the validated commit and publishes the GitHub Release.
@@ -83,4 +87,38 @@ For a fully immutable reference, use the digest reported by the publication work
 ```bash
 wkg oci pull ghcr.io/jfrz38/adaptive-admission@sha256:<digest> \
   --output adaptive-admission-component.wasm
+```
+
+## Rust crate registry
+
+The same `Publish Release` workflow can publish `adaptive-admission-core` to crates.io. Select
+`rust-crate` for only the native crate or `all` to publish both registry artifacts. The workflow:
+
+1. Checks out the validated commit identified by the latest stable GitHub Release.
+2. Confirms the inherited workspace version matches that release.
+3. Uses `check-version-change` to compare it with crates.io.
+4. Runs `cargo publish --dry-run` against the tagged source.
+5. Exchanges the job's GitHub OIDC identity for a short-lived crates.io token.
+6. Publishes only `adaptive-admission-core`; the component crate is not publishable.
+
+If the exact crate version is already present, repeating the workflow succeeds without publishing
+again. It rejects a release older than the latest non-yanked crates.io version. Published crate
+versions cannot be replaced; yank a defective version and prepare a new release instead.
+
+Before the first publication, configure a pending trusted publisher for
+`adaptive-admission-core` in crates.io with:
+
+- GitHub owner: `jfrz38`
+- Repository: `adaptive-admission-controller`
+- Workflow: `publish.yml`
+- Environment: `crates-publish`
+
+Also create and protect the matching `crates-publish` GitHub environment. No long-lived crates.io
+token is stored in the repository.
+
+Rust consumers can pin a published version with:
+
+```toml
+[dependencies]
+adaptive-admission-core = "=0.1.0"
 ```
