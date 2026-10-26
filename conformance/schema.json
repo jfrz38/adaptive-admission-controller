@@ -75,6 +75,7 @@
         { "$ref": "#/$defs/timestampedOperation" },
         { "$ref": "#/$defs/nextDeadline" },
         { "$ref": "#/$defs/latestStatistics" },
+        { "$ref": "#/$defs/latestDiagnostics" },
         { "$ref": "#/$defs/priorityPercentile" }
       ]
     },
@@ -155,6 +156,15 @@
         "expect": {
           "oneOf": [{ "$ref": "#/$defs/statistics" }, { "type": "null" }]
         }
+      }
+    },
+    "latestDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "expect"],
+      "properties": {
+        "operation": { "const": "latest-diagnostics" },
+        "expect": { "$ref": "#/$defs/diagnostics" }
       }
     },
     "priorityPercentile": {
@@ -266,6 +276,23 @@
         "successfulRequests": { "$ref": "#/$defs/u64" },
         "throughputPerSecond": { "type": "number" },
         "maxInFlight": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "threshold", "concurrencyLimit", "queueTimeoutMs", "targetLatencyMs",
+        "aggregatedLatencyMs"
+      ],
+      "properties": {
+        "threshold": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "concurrencyLimit": { "type": "integer", "minimum": 1 },
+        "queueTimeoutMs": { "$ref": "#/$defs/u64" },
+        "targetLatencyMs": { "type": "number", "exclusiveMinimum": 0 },
+        "aggregatedLatencyMs": {
+          "oneOf": [{ "type": "number", "exclusiveMinimum": 0 }, { "type": "null" }]
+        }
       }
     },
     "error": {

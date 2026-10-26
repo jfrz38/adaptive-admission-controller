@@ -243,6 +243,16 @@ pub struct StatisticsSnapshot {
     pub max_in_flight: usize,
 }
 
+/// Current controller values intended for diagnostics and operational visualization.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ControllerDiagnostics {
+    pub threshold: u16,
+    pub concurrency_limit: usize,
+    pub queue_timeout_ms: u64,
+    pub target_latency_ms: f64,
+    pub aggregated_latency_ms: Option<f64>,
+}
+
 /// Host-reported result of started work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outcome {

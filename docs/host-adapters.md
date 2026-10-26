@@ -87,6 +87,11 @@ component, not a mock or a native reimplementation. It must additionally test la
 boundaries such as fixed-width integer representation, generated error shapes, resource lifetime,
 timer behavior, and package asset resolution.
 
+Hosts may expose `latest-diagnostics` for operational tooling and simulations. The snapshot reports
+the effective admission threshold, concurrency limit, adaptive queue timeout, target latency, and
+filtered latency used by automatic tuning. Reading it never advances time or changes controller
+state; applications must not depend on it for admission correctness.
+
 Target-specific failures do not belong in shared scenarios when native targets legitimately differ.
 For example, a `u64` collection bound can fit native 64-bit Rust but produce `numeric-overflow` when
 converted to `usize` by the wasm32 component.

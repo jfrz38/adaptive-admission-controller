@@ -88,6 +88,10 @@ impl PriorityQueue {
         self.queue_timeout_ms = queue_timeout_ms;
     }
 
+    pub(crate) const fn timeout_ms(&self) -> u64 {
+        self.queue_timeout_ms
+    }
+
     pub(crate) fn contains(&self, request_id: RequestId) -> bool {
         self.requests.contains_key(&request_id)
     }
