@@ -1,0 +1,151 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Registry target to publish
+        required: true
+        type: choice
+        options:
+          - wasm-oci
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  select-release:
+    name: Select and validate release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      reference: ${{ steps.release.outputs.reference }}
+      sha256: ${{ steps.release.outputs.sha256 }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require main
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Publication must be dispatched from main, found ${GITHUB_REF}." >&2
+            exit 1
+          fi
+      - name: Check out main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select latest stable release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')
+          if [[ ! "${tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Latest stable release tag is not v<SemVer>: ${tag}" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+
+          git fetch origin main "refs/tags/${tag}:refs/tags/${tag}"
+          commit=$(git rev-parse "${tag}^{commit}")
+          if ! git merge-base --is-ancestor "${commit}" origin/main; then
+            echo "Release ${tag} is not reachable from main." >&2
+            exit 1
+          fi
+
+          mkdir -p dist
+          gh release download "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir dist
+          (
+            cd dist
+            sha256sum --check SHA256SUMS
+          )
+
+          manifest="dist/adaptive-admission-release-v${version}.json"
+          component=$(jq -r '.component.artifact' "${manifest}")
+          sha256=$(jq -r '.component.sha256' "${manifest}")
+          reference=$(jq -r '.component.ociReference' "${manifest}")
+          manifest_version=$(jq -r '.version' "${manifest}")
+          manifest_tag=$(jq -r '.tag' "${manifest}")
+          manifest_commit=$(jq -r '.source.commit' "${manifest}")
+          tree_dirty=$(jq -r '.source.treeDirty' "${manifest}")
+
+          test "${manifest_version}" = "${version}"
+          test "${manifest_tag}" = "${tag}"
+          test "${manifest_commit}" = "${commit}"
+          test "${tree_dirty}" = "false"
+          test "${component}" = "adaptive-admission-component-v${version}.wasm"
+          test "${reference}" = "ghcr.io/jfrz38/adaptive-admission:${version}"
+          test "$(sha256sum "dist/${component}" | awk '{print $1}')" = "${sha256}"
+
+          {
+            echo "commit=${commit}"
+            echo "reference=${reference}"
+            echo "sha256=${sha256}"
+            echo "tag=${tag}"
+            echo "version=${version}"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Preserve validated release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: publish-release-assets
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-wasm-oci:
+    name: Publish WebAssembly component to GHCR
+    if: inputs.target == 'wasm-oci'
+    needs: select-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: packages-publish
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WKG_OCI_PASSWORD: ${{ github.token }}
+      WKG_OCI_USERNAME: ${{ github.actor }}
+    steps:
+      - name: Check out publication tooling
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Download validated release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: publish-release-assets
+          path: dist
+      - name: Restore wkg
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cargo/bin/wkg
+          key: wkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+      - name: Install wkg
+        run: make install-wkg
+      - name: Publish validated component
+        shell: bash
+        env:
+          COMPONENT_REFERENCE: ${{ needs.select-release.outputs.reference }}
+          COMPONENT_SHA256: ${{ needs.select-release.outputs.sha256 }}
+          RELEASE_COMMIT: ${{ needs.select-release.outputs.commit }}
+          RELEASE_VERSION: ${{ needs.select-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          make wkg-check
+          sh scripts/publish-component-oci.sh \
+            "dist/adaptive-admission-component-v${RELEASE_VERSION}.wasm" \
+            "${COMPONENT_REFERENCE}" \
+            "${COMPONENT_SHA256}" \
+            "${RELEASE_COMMIT}"
