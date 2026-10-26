@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
 WASM_TOOLS_VERSION ?= 1.262.0
+WKG_VERSION ?= 0.16.1
 WASM_TARGET ?= wasm32-unknown-unknown
 DIST_DIR ?= dist
 COMPONENT_MODULE := target/$(WASM_TARGET)/release/adaptive_admission_component.wasm
@@ -31,7 +32,7 @@ crate-package-check: ## Package and verify the public Rust crate without publish
 
 check: fmt-check lint test doc crate-package-check ## Run all required Rust checks
 
-.PHONY: version-check sync-version install-wasm-tools wasm-tools-check component dist
+.PHONY: version-check sync-version install-wasm-tools wasm-tools-check install-wkg wkg-check component dist
 version-check: ## Verify that Cargo and WIT versions agree
 	@sh scripts/release-version.sh
 
@@ -41,7 +42,13 @@ sync-version: ## Synchronize WIT and Cargo.lock with the workspace version
 	@$(MAKE) version-check
 
 install-wasm-tools: ## Install the pinned wasm-tools release
-	cargo install wasm-tools --version "=$(WASM_TOOLS_VERSION)" --locked
+	@actual_version="$$(wasm-tools --version 2>/dev/null || true)"; \
+	expected_version="wasm-tools $(WASM_TOOLS_VERSION)"; \
+	if [ "$$actual_version" = "$$expected_version" ]; then \
+		echo "$$expected_version is already installed"; \
+	else \
+		cargo install wasm-tools --version "=$(WASM_TOOLS_VERSION)" --locked; \
+	fi
 
 wasm-tools-check:
 	@actual_version="$$(wasm-tools --version 2>/dev/null || true)"; \
@@ -49,6 +56,24 @@ wasm-tools-check:
 	if [ "$$actual_version" != "$$expected_version" ]; then \
 		echo "expected $$expected_version, found $${actual_version:-not installed}" >&2; \
 		echo "run 'make install-wasm-tools' before building the component" >&2; \
+		exit 1; \
+	fi
+
+install-wkg: ## Install the pinned WebAssembly package registry client
+	@actual_version="$$(wkg --version 2>/dev/null || true)"; \
+	expected_version="wkg $(WKG_VERSION)"; \
+	if [ "$$actual_version" = "$$expected_version" ]; then \
+		echo "$$expected_version is already installed"; \
+	else \
+		cargo install wkg --version "=$(WKG_VERSION)" --locked; \
+	fi
+
+wkg-check:
+	@actual_version="$$(wkg --version 2>/dev/null || true)"; \
+	expected_version="wkg $(WKG_VERSION)"; \
+	if [ "$$actual_version" != "$$expected_version" ]; then \
+		echo "expected $$expected_version, found $${actual_version:-not installed}" >&2; \
+		echo "run 'make install-wkg' before publishing the component" >&2; \
 		exit 1; \
 	fi
 

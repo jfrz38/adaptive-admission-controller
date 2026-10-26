@@ -103,10 +103,10 @@ jobs:
           fi
 
           gh release upload "${tag}" \
-            dist/adaptive-admission-component-v${version}.wasm \
-            dist/adaptive-admission-world-v${version}.wit \
-            dist/adaptive-admission-conformance-v${version}.tar.gz \
-            dist/adaptive-admission-release-v${version}.json \
+            "dist/adaptive-admission-component-v${version}.wasm" \
+            "dist/adaptive-admission-world-v${version}.wit" \
+            "dist/adaptive-admission-conformance-v${version}.tar.gz" \
+            "dist/adaptive-admission-release-v${version}.json" \
             dist/SHA256SUMS \
             --repo "${GITHUB_REPOSITORY}" \
             --clobber
