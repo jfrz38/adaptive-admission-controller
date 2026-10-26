@@ -101,6 +101,7 @@ jobs:
             dist/adaptive-admission-component-v${version}.wasm \
             dist/adaptive-admission-world-v${version}.wit \
             dist/adaptive-admission-conformance-v${version}.tar.gz \
+            dist/adaptive-admission-release-v${version}.json \
             dist/SHA256SUMS \
             --repo "${GITHUB_REPOSITORY}" \
             --clobber
@@ -109,6 +110,7 @@ jobs:
             "adaptive-admission-component-v${version}.wasm" \
             "adaptive-admission-world-v${version}.wit" \
             "adaptive-admission-conformance-v${version}.tar.gz" \
+            "adaptive-admission-release-v${version}.json" \
             "SHA256SUMS" | sort)
           actual_assets=$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | sort)
           if [ "${actual_assets}" != "${expected_assets}" ]; then
