@@ -43,6 +43,8 @@ Each release contains:
 - `adaptive-admission-component-v<version>.wasm`: validated WebAssembly component.
 - `adaptive-admission-world-v<version>.wit`: source WIT contract.
 - `adaptive-admission-conformance-v<version>.tar.gz`: conformance documentation, schema, and scenarios.
-- `SHA256SUMS`: SHA-256 digests for all three assets.
+- `adaptive-admission-release-v<version>.json`: machine-readable source, toolchain, artifact,
+  checksum, Rust crate, and expected OCI reference metadata.
+- `SHA256SUMS`: SHA-256 digests for the component, WIT, conformance archive, and release manifest.
 
 Build the same asset set locally with `make dist`. Generated files are written to `dist/`, which is ignored by Git.

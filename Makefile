@@ -10,7 +10,7 @@ COMPONENT_ARTIFACT := target/$(WASM_TARGET)/release/adaptive_admission_component
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf " \033[36m%-20s\033[0m  %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-.PHONY: fmt fmt-check lint test doc check
+.PHONY: fmt fmt-check lint test doc crate-package-check check
 fmt: ## Format Rust sources
 	cargo fmt --all
 
@@ -26,7 +26,10 @@ test: ## Run all workspace tests
 doc: ## Build workspace documentation with warnings denied
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
-check: fmt-check lint test doc ## Run all required Rust checks
+crate-package-check: ## Package and verify the public Rust crate without publishing it
+	cargo package --locked --allow-dirty -p adaptive-admission-core
+
+check: fmt-check lint test doc crate-package-check ## Run all required Rust checks
 
 .PHONY: version-check sync-version install-wasm-tools wasm-tools-check component dist
 version-check: ## Verify that Cargo and WIT versions agree
@@ -53,6 +56,11 @@ component: version-check wasm-tools-check ## Build and validate the WebAssembly 
 	cargo build --locked -p adaptive-admission-component --target "$(WASM_TARGET)" --release
 	wasm-tools component new "$(COMPONENT_MODULE)" -o "$(COMPONENT_ARTIFACT)"
 	wasm-tools validate "$(COMPONENT_ARTIFACT)"
+	@version="$$(sh scripts/release-version.sh)"; \
+	wasm-tools component targets \
+		crates/adaptive-admission-component/wit/world.wit \
+		"$(COMPONENT_ARTIFACT)" \
+		--world "jfrz38:adaptive-admission/adaptive-admission@$$version"
 
 dist: component ## Build versioned release assets in DIST_DIR
-	@sh scripts/package-release.sh "$(COMPONENT_ARTIFACT)" "$(DIST_DIR)"
+	@sh scripts/package-release.sh "$(COMPONENT_ARTIFACT)" "$(DIST_DIR)" "$(WASM_TARGET)"
