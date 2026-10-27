@@ -66,8 +66,9 @@ ghcr.io/jfrz38/adaptive-admission:<version>
 ```
 
 The workflow verifies that the release tag belongs to `main`, validates every release checksum,
-checks the source commit and clean-tree marker in the release manifest, and transfers those exact
-assets to a job with `packages: write`. The privileged job never rebuilds the component.
+checks the source commit and clean-tree marker in the release manifest, and uses
+`check-version-change` to resolve the exact GHCR tag and any existing manifest digest. It transfers
+those exact assets to a job with `packages: write`; the privileged job never rebuilds the component.
 
 Publication is idempotent. If the version tag already exists with the expected component bytes, the
 workflow succeeds without moving it. It fails if the tag resolves to different bytes. A newly
@@ -95,11 +96,11 @@ The same `Publish Release` workflow can publish `adaptive-admission-core` to cra
 `rust-crate` for only the native crate or `all` to publish both registry artifacts. The workflow:
 
 1. Checks out the validated commit identified by the latest stable GitHub Release.
-2. Confirms the inherited workspace version matches that release.
-3. Uses `check-version-change` to compare it with crates.io.
-4. Runs `cargo publish --dry-run` against the tagged source.
-5. Exchanges the job's GitHub OIDC identity for a short-lived crates.io token.
-6. Publishes only `adaptive-admission-core`; the component crate is not publishable.
+2. Uses `check-version-change` to resolve the inherited workspace version and compare it with
+   crates.io.
+3. Runs `cargo publish --dry-run` against the tagged source.
+4. Exchanges the job's GitHub OIDC identity for a short-lived crates.io token.
+5. Publishes only `adaptive-admission-core`; the component crate is not publishable.
 
 If the exact crate version is already present, repeating the workflow succeeds without publishing
 again. It rejects a release older than the latest non-yanked crates.io version. Published crate

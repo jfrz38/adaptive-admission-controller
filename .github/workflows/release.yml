@@ -37,11 +37,9 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Verify release version increased
         if: steps.release-baseline.outputs.tag != ''
-        uses: jfrz38/check-version-change@176c454a13e14862ec362573f26c9e9395855d0c # v1.5.0
+        uses: jfrz38/check-version-change@12828e3736f108329fe0ea7a8800966b4b2730af # v1.6.0
         with:
-          file-path: Cargo.toml
-          file-format: raw
-          version-pattern: '^version\s*=\s*"(\d+\.\d+\.\d+)"'
+          file-path: crates/adaptive-admission-core/Cargo.toml
           compare-source: git-ref
           compare-ref: ${{ steps.release-baseline.outputs.tag }}
           allow-missing-compare-file: true

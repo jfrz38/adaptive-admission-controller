@@ -5,6 +5,7 @@ component_path=${1:?component path is required}
 reference=${2:?OCI reference is required}
 expected_sha256=${3:?expected component SHA-256 is required}
 source_commit=${4:?source commit is required}
+preflight_digest=${5-}
 
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${WKG_OCI_USERNAME:?WKG_OCI_USERNAME is required}"
@@ -32,6 +33,7 @@ fi
 path_and_tag=${reference#ghcr.io/jfrz38/}
 package_name=${path_and_tag%:*}
 tag=${path_and_tag##*:}
+repository=${reference%:*}
 temporary_dir=$(mktemp -d)
 trap 'rm -rf "$temporary_dir"' EXIT
 
@@ -69,7 +71,11 @@ if [ "$matching_count" -eq 1 ]; then
             exit 1
             ;;
     esac
-    wkg oci pull "ghcr.io/jfrz38/$package_name@$digest" --output "$temporary_dir/published.wasm"
+    if [ -n "$preflight_digest" ] && [ "$digest" != "$preflight_digest" ]; then
+        echo "OCI tag $reference changed after the preflight check" >&2
+        exit 1
+    fi
+    wkg oci pull "$reference" --output "$temporary_dir/published.wasm"
     published_sha256=$(sha256sum "$temporary_dir/published.wasm" | awk '{print $1}')
     if [ "$published_sha256" != "$expected_sha256" ]; then
         echo "OCI tag $reference already points to different component bytes" >&2
@@ -77,6 +83,11 @@ if [ "$matching_count" -eq 1 ]; then
     fi
     echo "$reference already publishes the expected component ($digest)."
     exit 0
+fi
+
+if [ -n "$preflight_digest" ]; then
+    echo "OCI tag $reference disappeared after the preflight check" >&2
+    exit 1
 fi
 
 push_output=$(wkg oci push \
@@ -99,7 +110,7 @@ case "$digest" in
         ;;
 esac
 
-wkg oci pull "ghcr.io/jfrz38/$package_name@$digest" --output "$temporary_dir/published.wasm"
+wkg oci pull "$repository@$digest" --output "$temporary_dir/published.wasm"
 published_sha256=$(sha256sum "$temporary_dir/published.wasm" | awk '{print $1}')
 if [ "$published_sha256" != "$expected_sha256" ]; then
     echo "published component checksum mismatch" >&2
