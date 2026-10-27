@@ -32,6 +32,10 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
       crate-publish-required: ${{ steps.crate-policy.outputs.publish-required }}
+      oci-manifest-digest: ${{ steps.oci-version.outputs.oci-manifest-digest }}
+    permissions:
+      contents: read
+      packages: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -100,34 +104,17 @@ jobs:
             echo "version=${version}"
           } >> "${GITHUB_OUTPUT}"
       - name: Check out selected release source
-        if: inputs.target == 'all' || inputs.target == 'rust-crate'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ steps.release.outputs.commit }}
           path: release-source
           persist-credentials: false
-      - name: Prepare inherited crate version for registry comparison
-        if: inputs.target == 'all' || inputs.target == 'rust-crate'
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          set -euo pipefail
-          crate_version=$(cd release-source && sh scripts/release-version.sh)
-          test "${crate_version}" = "${RELEASE_VERSION}"
-          mkdir -p registry-check
-          cat > registry-check/Cargo.toml <<EOF
-          [package]
-          name = "adaptive-admission-core"
-          version = "${crate_version}"
-          EOF
       - name: Compare crate version with crates.io
         if: inputs.target == 'all' || inputs.target == 'rust-crate'
         id: crate-version
-        uses: jfrz38/check-version-change@176c454a13e14862ec362573f26c9e9395855d0c # v1.5.0
+        uses: jfrz38/check-version-change@12828e3736f108329fe0ea7a8800966b4b2730af # v1.6.0
         with:
-          file-path: registry-check/Cargo.toml
-          package-name: adaptive-admission-core
+          file-path: release-source/crates/adaptive-admission-core/Cargo.toml
           compare-source: registry
           registry: crates-io
       - name: Decide whether the crate needs publication
@@ -153,6 +140,41 @@ jobs:
           else
             echo "Release ${LOCAL_VERSION} is not higher than crates.io version ${COMPARED_VERSION}." >&2
             exit 1
+          fi
+      - name: Resolve component tag in GHCR
+        if: inputs.target == 'all' || inputs.target == 'wasm-oci'
+        id: oci-version
+        uses: jfrz38/check-version-change@12828e3736f108329fe0ea7a8800966b4b2730af # v1.6.0
+        with:
+          file-path: release-source/crates/adaptive-admission-component/Cargo.toml
+          compare-source: oci
+          oci-repository: ghcr.io/jfrz38/adaptive-admission
+          oci-token: ${{ github.token }}
+      - name: Validate component tag state
+        if: inputs.target == 'all' || inputs.target == 'wasm-oci'
+        shell: bash
+        env:
+          CHANGED: ${{ steps.oci-version.outputs.changed }}
+          COMPONENT_REFERENCE: ${{ steps.release.outputs.reference }}
+          LOCAL_VERSION: ${{ steps.oci-version.outputs.local-version }}
+          MANIFEST_DIGEST: ${{ steps.oci-version.outputs.oci-manifest-digest }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RESOLVED_REFERENCE: ${{ steps.oci-version.outputs.oci-reference-resolved }}
+          TAG_EXISTS: ${{ steps.oci-version.outputs.oci-tag-exists }}
+        run: |
+          set -euo pipefail
+          test "${LOCAL_VERSION}" = "${RELEASE_VERSION}"
+          test "${RESOLVED_REFERENCE}" = "${COMPONENT_REFERENCE}"
+          if [ "${TAG_EXISTS}" = "true" ]; then
+            test "${CHANGED}" = "false"
+            case "${MANIFEST_DIGEST}" in
+              sha256:*) ;;
+              *) echo "GHCR did not report a valid manifest digest." >&2; exit 1 ;;
+            esac
+          else
+            test "${TAG_EXISTS}" = "false"
+            test "${CHANGED}" = "true"
+            test -z "${MANIFEST_DIGEST}"
           fi
       - name: Preserve validated release assets
         if: inputs.target == 'all' || inputs.target == 'wasm-oci'
@@ -199,6 +221,7 @@ jobs:
         env:
           COMPONENT_REFERENCE: ${{ needs.select-release.outputs.reference }}
           COMPONENT_SHA256: ${{ needs.select-release.outputs.sha256 }}
+          EXISTING_OCI_DIGEST: ${{ needs.select-release.outputs.oci-manifest-digest }}
           RELEASE_COMMIT: ${{ needs.select-release.outputs.commit }}
           RELEASE_VERSION: ${{ needs.select-release.outputs.version }}
         run: |
@@ -208,7 +231,8 @@ jobs:
             "dist/adaptive-admission-component-v${RELEASE_VERSION}.wasm" \
             "${COMPONENT_REFERENCE}" \
             "${COMPONENT_SHA256}" \
-            "${RELEASE_COMMIT}"
+            "${RELEASE_COMMIT}" \
+            "${EXISTING_OCI_DIGEST}"
 
   publish-rust-crate:
     name: Publish Rust crate to crates.io
