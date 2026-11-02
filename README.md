@@ -1,5 +1,10 @@
 # Adaptive Admission Controller
 
+[![CI](https://github.com/jfrz38/adaptive-admission-controller/actions/workflows/ci.yml/badge.svg)](https://github.com/jfrz38/adaptive-admission-controller/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/adaptive-admission-core.svg)](https://crates.io/crates/adaptive-admission-core)
+[![docs.rs](https://docs.rs/adaptive-admission-core/badge.svg)](https://docs.rs/adaptive-admission-core)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Adaptive Admission Controller protects a service as it approaches saturation. Instead of enforcing
 a fixed request rate, it decides which work may start from the service's observed capacity, recent
 latency, and request priority.
@@ -181,6 +186,12 @@ cargo test -p adaptive-admission-core --test conformance
 Versioned releases keep the native core, WebAssembly component, WIT contract, and conformance
 scenarios aligned. See the [release process](docs/releasing.md) for the artifact and publication
 contract.
+
+## Contributing and security
+
+Contributions are welcome through pull requests targeting `develop`. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development and validation workflow. Report suspected
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## References
 

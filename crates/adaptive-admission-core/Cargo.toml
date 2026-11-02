@@ -11,6 +11,12 @@ homepage = "https://github.com/jfrz38/adaptive-admission-controller"
 documentation = "https://docs.rs/adaptive-admission-core"
 keywords = ["admission-control", "concurrency", "load-shedding", "pid-controller"]
 categories = ["algorithms"]
+include = [
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "src/**/*.rs",
+]
 
 [dependencies]
 

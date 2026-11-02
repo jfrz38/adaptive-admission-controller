@@ -253,7 +253,7 @@ jobs:
           ref: ${{ needs.select-release.outputs.commit }}
           persist-credentials: false
       - name: Validate crate package
-        run: make crate-publish-check
+        run: make crate-publish-check-clean
       - name: Authenticate with crates.io
         id: crates-io-auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
