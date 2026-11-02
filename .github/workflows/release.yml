@@ -107,7 +107,7 @@ jobs:
             gh release create "${tag}" \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
-              --title "Adaptive Admission Controller ${tag}" \
+              --title "${tag}" \
               --generate-notes \
               --draft
           fi
