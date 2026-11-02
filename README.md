@@ -1,72 +1,203 @@
 # Adaptive Admission Controller
 
-Adaptive Admission Controller is a portable admission-control engine written in Rust and designed for distribution through WebAssembly.
+[![CI](https://github.com/jfrz38/adaptive-admission-controller/actions/workflows/ci.yml/badge.svg)](https://github.com/jfrz38/adaptive-admission-controller/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/adaptive-admission-core.svg)](https://crates.io/crates/adaptive-admission-core)
+[![docs.rs](https://docs.rs/adaptive-admission-core/badge.svg)](https://docs.rs/adaptive-admission-core)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-It protects services under load by combining priority-aware admission, bounded concurrency, queue eviction, runtime statistics, PID feedback, and automatic concurrency tuning. The core is independent of HTTP frameworks, gateway SDKs, asynchronous runtimes, and infrastructure concerns.
+Adaptive Admission Controller protects a service as it approaches saturation. Instead of enforcing
+a fixed request rate, it decides which work may start from the service's observed capacity, recent
+latency, and request priority.
 
-## Design principles
+It evolves the design originally explored in
+[`rate-limit-pid-controller`](https://github.com/jfrz38/rate-limit-pid-controller), inspired by
+Uber's Cinnamon load-shedding architecture. It combines priority-aware shedding, PID-controlled
+admission, and adaptive concurrency in a deterministic, portable state machine.
 
-- **Portable core:** the same control algorithm can be embedded in different languages and gateways.
-- **Host-driven execution:** the core decides what should run; the host owns requests, tasks, timers, and I/O.
-- **Deterministic state:** time and execution outcomes are explicit inputs, making behavior reproducible and testable.
-- **Minimal dependencies:** the algorithm targets zero external production dependencies; integration dependencies remain isolated in adapters.
-- **Explicit scope:** controller state and limits apply to one instance or worker unless an external coordination mechanism is provided.
+## Why admission control?
 
-## Documentation
+A rate limiter answers "has this client exceeded a quota?" Admission control answers a different
+question: "can the service safely start this work now?"
 
-See [Architecture and project scope](docs/architecture.md) for:
+When all execution slots are busy, the controller can hold bounded work in a priority queue. Under
+sustained pressure it reduces admission of less important requests, while continuing to protect
+higher-priority work. It learns from completed executions to adjust admission, queue timeouts, and
+concurrency.
 
-- Goals and non-goals.
-- The host/core responsibility boundary.
-- The proposed state-machine API.
-- Concurrency, timing, persistence, and portability constraints.
-- WebAssembly and gateway integration strategy.
-- Behavioral guarantees and implementation approach.
+This is useful when a service needs to:
 
-## Current status
+- Avoid accepting more concurrent work than it can handle.
+- Preserve capacity for important requests during overload.
+- Queue a bounded amount of work instead of creating an unbounded backlog.
+- Adapt to changing service latency and throughput rather than relying only on static limits.
 
-The first eight implementation iterations provide the `adaptive-admission-core` Rust crate with deterministic admission, bounded priority/FIFO queueing, concurrency enforcement, expiration, cancellation, shutdown, bounded runtime statistics, coherent host-driven execution windows, PID feedback that adapts the priority threshold, queue timeouts adapted from published execution latency, and automatic concurrency and target-latency tuning. The `adaptive-admission-component` crate exposes that state machine as a synchronous WebAssembly Component Model resource described with WIT. Language-neutral JSON [conformance scenarios](conformance/README.md) specify the observable contract shared by embeddings. CI validates the workspace and component boundary, while tagged GitHub Releases distribute the component, WIT contract, conformance scenarios, and checksums.
+## How it works
 
-This repository contains the portable Rust core, its WebAssembly component boundary, and the conformance contract. Host-language packages and gateway adapters are separate consumers and are developed and distributed independently.
+The controller is a synchronous state machine. The **host** owns HTTP requests, tasks, timers, and
+I/O; the **controller** owns admission decisions and control state.
 
-## Development
-
-The repository pins its Rust toolchain and exposes its development commands through the Makefile. List the available targets with:
-
-```bash
-make
+```mermaid
+flowchart LR
+    request[Incoming work] --> host[Host or gateway]
+    host -->|submit priority + time| controller[Admission controller]
+    controller -->|Start| execute[Host executes work]
+    controller -->|No immediate action| queue[Bounded priority queue]
+    controller -->|Reject| rejected[Host rejects work]
+    queue -->|Start when capacity opens| execute
+    queue -->|Evict on timeout| rejected
+    execute -->|complete outcome + time| controller
+    controller -->|next deadline| host
 ```
 
-Run the checks required by CI with:
+A typical interaction is:
 
-```bash
-make check
+```text
+host receives request A
+host -> submit(priority, 1000)
+controller -> Start(request_id=1)
+host executes A
+host -> complete(1, Success, 1080)
+controller records an 80 ms execution and may start queued work
 ```
 
-Build and validate the WebAssembly component with:
+Calls to one controller instance must be serialized. The host supplies monotonic timestamps,
+executes returned actions in order, reports outcomes, and schedules the controller's next deadline.
+This explicit boundary keeps behavior deterministic and allows the same algorithm to run natively or
+as a WebAssembly component.
+
+## What the controller provides
+
+- **Priority-aware admission:** priorities range from `0` to `767`; lower values are more important.
+- **Bounded execution:** the controller never starts work beyond its current concurrency limit.
+- **Bounded queueing:** queued work is ordered by priority and FIFO within the same priority.
+- **Lifecycle decisions:** explicit start, reject, evict, cancel, threshold-change, and
+  concurrency-change actions.
+- **Adaptive control:** PID feedback changes the admission threshold, while observed execution data
+  informs queue timeouts, concurrency, and target latency.
+- **Deterministic time:** the host provides time, so tests and different embeddings can reproduce the
+  same decisions from the same event sequence.
+- **Portable contracts:** a WIT interface and language-neutral conformance scenarios define the
+  WebAssembly boundary.
+
+## Is it a fit?
+
+The project is designed for a native application, language runtime, proxy, or gateway that can:
+
+- Keep a request or task while it waits and resume it later.
+- Schedule a wake-up for the next controller deadline.
+- Report completion, failure, cancellation, and shutdown.
+- Retain one stateful controller at a clearly defined worker or process scope.
+
+It does **not** provide an HTTP server, asynchronous runtime, distributed coordination, or a global
+limit across processes and nodes. A platform with only a synchronous allow/reject hook can use
+immediate admission, but cannot reproduce priority queueing safely.
+
+## Project components
+
+The project separates the portable implementation from its cross-language contract:
+
+| Artifact | Intended use |
+| --- | --- |
+| `adaptive-admission-core` | Native Rust state machine with no production dependencies. |
+| `adaptive-admission-component` | WebAssembly Component Model wrapper around the core. |
+| WIT contract | Callable types and operations exposed to WebAssembly hosts. |
+| Conformance scenarios | Language-neutral traces used to validate host implementations. |
+
+Host-language packages and gateway-specific adapters are separate consumers. They are not maintained
+in this repository.
+
+## Embed the controller
+
+### Use the native Rust core
+
+Create a controller and submit work metadata:
+
+```rust
+use adaptive_admission_core::{Action, Config, Controller, Priority};
+
+let mut controller = Controller::new(Config::default())?;
+let submission = controller.submit(Priority::new(100)?, 1_000.into())?;
+
+assert_eq!(
+    submission.actions,
+    vec![Action::Start {
+        request_id: submission.request_id,
+    }],
+);
+
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+An embedding must also process every returned action, call `complete` for started work, and drive
+`next_deadline`. See the [host adapter contract](docs/host-adapters.md) before building an
+integration.
+
+### Build the WebAssembly component
+
+The repository pins its Rust toolchain. With GNU Make available, install the pinned component tool
+and build the artifact:
 
 ```bash
 make install-wasm-tools
 make component
 ```
 
-The component artifact is written to
-`target/wasm32-unknown-unknown/release/adaptive_admission_component.component.wasm`. The
-componentization step requires `wasm-tools` 1.262.0, which can also inspect the exported contract
-with `wasm-tools component wit <artifact>`. Building for the capability-free target avoids adding
-ambient WASI clock, random, or I/O imports to the component.
+The validated component is written to:
 
-Run only the shared conformance contract with:
+```text
+target/wasm32-unknown-unknown/release/adaptive_admission_component.component.wasm
+```
+
+It targets `wasm32-unknown-unknown` and imports no ambient WASI clock, randomness, or I/O. Hosts in
+other languages should consume the released component and implement the WIT and host-adapter
+contracts rather than reimplementing the algorithm.
+
+## Development
+
+List the available development commands:
+
+```bash
+make
+```
+
+Run the checks required by CI:
+
+```bash
+make check
+```
+
+Run only the shared conformance contract:
 
 ```bash
 cargo test -p adaptive-admission-core --test conformance
 ```
 
+## Documentation
+
+| Document | Read it when... |
+| --- | --- |
+| [Architecture and scope](docs/architecture.md) | You want to understand the control model, boundaries, guarantees, and limitations. |
+| [Host adapter contract](docs/host-adapters.md) | You are embedding the component in a language runtime or gateway. |
+| [Conformance scenarios](conformance/README.md) | You are validating another host or implementation against the observable contract. |
+| [Release process](docs/releasing.md) | You maintain versions or publish release artifacts. |
+
 ## Releases
 
-A merge to `main` creates a GitHub Release after the complete workspace and component validations
-pass. The workspace version and WIT package version identify the release. See
-[`docs/releasing.md`](docs/releasing.md) for the release process and asset contract.
+Versioned releases keep the native core, WebAssembly component, WIT contract, and conformance
+scenarios aligned. See the [release process](docs/releasing.md) for the artifact and publication
+contract.
+
+## Contributing and security
+
+Contributions are welcome through pull requests targeting `develop`. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development and validation workflow. Report suspected
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## References
+
+- [Cinnamon: Using Century Old Tech to Build a Mean Load Shedder](https://www.uber.com/en-ES/blog/cinnamon-using-century-old-tech-to-build-a-mean-load-shedder/)
+- [PID Controller for Cinnamon](https://www.uber.com/en-ES/blog/pid-controller-for-cinnamon/)
+- [Cinnamon Auto-Tuner: Adaptive Concurrency in the Wild](https://www.uber.com/en-ES/blog/cinnamon-auto-tuner-adaptive-concurrency-in-the-wild/)
 
 ## License
 

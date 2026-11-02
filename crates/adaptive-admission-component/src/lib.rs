@@ -124,6 +124,10 @@ impl wit::GuestAdmissionController for AdmissionController {
             .map(statistics_to_wit)
     }
 
+    fn latest_diagnostics(&self) -> wit::ControllerDiagnostics {
+        diagnostics_to_wit(self.inner.borrow().diagnostics())
+    }
+
     fn priority_percentile(&self, percentile: u8) -> Option<u16> {
         self.inner.borrow().priority_percentile(percentile)
     }
@@ -329,6 +333,16 @@ fn statistics_to_wit(snapshot: &core::StatisticsSnapshot) -> wit::StatisticsSnap
     }
 }
 
+fn diagnostics_to_wit(diagnostics: core::ControllerDiagnostics) -> wit::ControllerDiagnostics {
+    wit::ControllerDiagnostics {
+        threshold: diagnostics.threshold,
+        concurrency_limit: diagnostics.concurrency_limit as u64,
+        queue_timeout_ms: diagnostics.queue_timeout_ms,
+        target_latency_ms: diagnostics.target_latency_ms,
+        aggregated_latency_ms: diagnostics.aggregated_latency_ms,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +432,25 @@ mod tests {
                 received_ms: 9,
             }))
         );
+    }
+
+    #[test]
+    fn resource_exposes_controller_diagnostics() {
+        let controller = controller(core::Config {
+            initial_threshold: 700,
+            max_concurrent_requests: 3,
+            queue_timeout_ms: 250,
+            ..core::Config::default()
+        });
+
+        let diagnostics =
+            <AdmissionController as wit::GuestAdmissionController>::latest_diagnostics(&controller);
+
+        assert_eq!(diagnostics.threshold, 700);
+        assert_eq!(diagnostics.concurrency_limit, 3);
+        assert_eq!(diagnostics.queue_timeout_ms, 250);
+        assert_eq!(diagnostics.target_latency_ms, 100.0);
+        assert_eq!(diagnostics.aggregated_latency_ms, None);
     }
 
     #[test]

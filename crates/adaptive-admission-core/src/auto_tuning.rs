@@ -38,6 +38,14 @@ impl AutoTuner {
             .min()
     }
 
+    pub(crate) fn target_latency_ms(&self) -> f64 {
+        self.latency.target()
+    }
+
+    pub(crate) fn aggregated_latency_ms(&self) -> Option<f64> {
+        self.latency.filtered_latency
+    }
+
     pub(crate) fn advance(
         &mut self,
         now: Timestamp,

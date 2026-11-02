@@ -3,9 +3,9 @@ use std::fs;
 use std::path::Path;
 
 use adaptive_admission_core::{
-    Action, CancellationReason, Config, ConfigError, Controller, ControllerError, EvictionReason,
-    Outcome, PidConfig, Priority, PriorityError, RejectionReason, RequestId, StatisticsConfig,
-    StatisticsSnapshot,
+    Action, CancellationReason, Config, ConfigError, Controller, ControllerDiagnostics,
+    ControllerError, EvictionReason, Outcome, PidConfig, Priority, PriorityError, RejectionReason,
+    RequestId, StatisticsConfig, StatisticsSnapshot,
 };
 use serde::Deserialize;
 
@@ -110,6 +110,9 @@ enum Step {
     },
     LatestStatistics {
         expect: Option<ExpectedStatistics>,
+    },
+    LatestDiagnostics {
+        expect: ExpectedDiagnostics,
     },
     PriorityPercentile {
         percentile: u8,
@@ -252,6 +255,16 @@ struct ExpectedStatistics {
     successful_requests: u64,
     throughput_per_second: f64,
     max_in_flight: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedDiagnostics {
+    threshold: u16,
+    concurrency_limit: usize,
+    queue_timeout_ms: u64,
+    target_latency_ms: f64,
+    aggregated_latency_ms: Option<f64>,
 }
 
 #[test]
@@ -428,6 +441,9 @@ fn run_step(
         Step::LatestStatistics { expect } => {
             assert_statistics(controller.latest_statistics(), expect.as_ref(), context);
         }
+        Step::LatestDiagnostics { expect } => {
+            assert_diagnostics(controller.diagnostics(), &expect, context);
+        }
         Step::PriorityPercentile { percentile, expect } => assert_eq!(
             controller.priority_percentile(percentile),
             expect,
@@ -584,6 +600,37 @@ fn assert_statistics(
             );
         }
         _ => panic!("{context}: unexpected latest statistics presence"),
+    }
+}
+
+fn assert_diagnostics(
+    actual: ControllerDiagnostics,
+    expected: &ExpectedDiagnostics,
+    context: &str,
+) {
+    assert_eq!(actual.threshold, expected.threshold, "{context}: threshold");
+    assert_eq!(
+        actual.concurrency_limit, expected.concurrency_limit,
+        "{context}: concurrency limit"
+    );
+    assert_eq!(
+        actual.queue_timeout_ms, expected.queue_timeout_ms,
+        "{context}: queue timeout"
+    );
+    assert_float(
+        actual.target_latency_ms,
+        expected.target_latency_ms,
+        context,
+        "target latency",
+    );
+    match (actual.aggregated_latency_ms, expected.aggregated_latency_ms) {
+        (None, None) => {}
+        (Some(actual), Some(expected)) => {
+            assert_float(actual, expected, context, "aggregated latency");
+        }
+        (actual, expected) => panic!(
+            "{context}: aggregated latency mismatch: actual {actual:?}, expected {expected:?}"
+        ),
     }
 }
 

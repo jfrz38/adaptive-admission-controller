@@ -2,403 +2,235 @@
 
 ## Purpose
 
-Traditional rate limiters usually accept or reject traffic according to a fixed quota. Adaptive Admission Controller instead adjusts admission to the observed condition of a service. It is intended to:
+Traditional rate limiters usually accept or reject traffic according to a fixed quota. Adaptive
+Admission Controller instead regulates whether work may start according to the observed condition of
+a service. It combines:
 
-- Reduce load as a service approaches saturation.
-- Protect higher-priority requests before lower-priority work.
-- Regulate concurrent executions.
-- Adjust admission thresholds through PID feedback.
-- Learn from observed latency and throughput.
-- Share one control algorithm across languages and gateways.
+- Priority-aware admission and rejection.
+- Bounded priority queueing.
+- A concurrency limit for active work.
+- Execution statistics over coherent time windows.
+- PID feedback for the admission threshold.
+- Automatic queue-timeout, concurrency, and target-latency tuning.
 
-The project builds on lessons from [`rate-limit-pid-controller`](https://github.com/jfrz38/rate-limit-pid-controller), but it is not a literal translation of its TypeScript implementation. The core boundary is designed so that it does not depend on Node.js, an HTTP framework, or a particular asynchronous runtime.
+The design evolves the approach explored in
+[`rate-limit-pid-controller`](https://github.com/jfrz38/rate-limit-pid-controller), inspired by
+Uber's [Cinnamon load-shedding architecture](https://www.uber.com/en-ES/blog/cinnamon-using-century-old-tech-to-build-a-mean-load-shedder/).
+The core boundary is independent of Node.js, HTTP frameworks, gateway SDKs, and asynchronous
+runtimes so the same control algorithm can be embedded in different hosts.
 
-## Goals
+## System boundary
 
-The project provides a Rust implementation of the common control logic:
-
-- Priorities and cohorts.
-- Admission and rejection.
-- Priority queueing and timeout eviction.
-- Concurrency limits.
-- Statistics over coherent execution windows.
-- PID control.
-- Automatic latency and concurrency tuning.
-
-The core is intended to compile to WebAssembly and remain deterministic, synchronous, and independent of infrastructure. Its behavior should be verifiable through shared conformance scenarios.
-
-The algorithm crate should use no external production dependencies unless doing so would materially improve correctness, safety, or maintainability. Platform SDKs and binding generators may be used by integration crates when necessary.
-
-## Non-goals
-
-The portable core does not:
-
-- Execute host-language callbacks, promises, or futures inside WebAssembly.
-- Include an asynchronous runtime.
-- Directly manage threads, sockets, process signals, or HTTP requests.
-- Provide persistence or distributed coordination.
-- Guarantee that one WebAssembly binary can be installed unchanged in every gateway.
-- Guarantee global limits across processes, workers, or nodes without external coordination.
-
-## Responsibility boundary
-
-The core acts as a state machine. It owns admission decisions and control state, while the host owns actual work and platform resources.
+The controller is a synchronous state machine. It owns decisions and control state, while its host
+owns the work and all platform resources.
 
 ### Core responsibilities
 
 - Validate controller configuration.
-- Track request state and legal transitions.
-- Select work according to priority and FIFO order.
+- Track request state and enforce legal transitions.
+- Apply the current admission threshold.
+- Select queued work by priority and FIFO order.
 - Enforce the current concurrency limit.
 - Expire queued requests.
 - Aggregate execution statistics.
-- Update PID and auto-tuning state.
+- Update PID and automatic-tuning state.
 - Return explicit actions for the host to perform.
 
 ### Host responsibilities
 
-- Associate controller request IDs with real requests, callbacks, or continuations.
-- Execute work selected by the core.
-- Report completion or failure.
-- Provide monotonic timestamps.
+- Associate controller request IDs with real requests, tasks, or continuations.
+- Serialize calls into each controller instance.
+- Execute work selected by the controller.
+- Report completion, failure, and cancellation.
+- Supply monotonic timestamps.
 - Schedule the next controller deadline.
-- Translate controller decisions into framework- or gateway-specific behavior.
-- Integrate logging, metrics, shutdown, and lifecycle events.
+- Translate decisions into framework- or gateway-specific behavior.
+- Own logging, metrics, shutdown, and lifecycle integration.
 
-### What "core" and "host" mean
-
-The **core** is the portable Rust state machine in `adaptive-admission-core`. It stores controller metadata, validates transitions, updates the control algorithm, and returns decisions. It does not own an HTTP request, execute application work, read a clock, or create a timer.
-
-The **host** is the environment embedding the core, such as a Node.js process, gateway plugin, proxy, or native application. It associates controller request IDs with real requests or tasks and translates actions into platform operations. For example:
-
-```text
-host receives request A
-host -> submit(priority, 1000)
-core -> Start(request_id=1)
-host executes A
-host -> complete(1, Success, 1080)
-core records an 80 ms execution and may return Start(request_id=2)
-```
-
-When a request waits, the host retains the real request while the core retains only its metadata. The host schedules the value returned by `next_deadline` and later calls `advance_time`; the core can then return `Evict` without ever owning or executing host work.
-
-### Internal organization
-
-The Rust implementation preserves the responsibility-oriented organization of the original TypeScript project. Admission, scheduling, priority queueing, statistics, PID control, timeout calculation, and automatic tuning remain focused components with private state and dedicated tests.
-
-This is not a requirement to translate every TypeScript class one-to-one. Rust structs and modules are used idiomatically, and a component is separated when it owns a coherent responsibility or invariant. The top-level `Controller` is the facade coordinating those components.
-
-This internal organization does not weaken the host/core boundary: every component listed above belongs to the portable core and must remain independent of host tasks, clocks, timers, logging implementations, and asynchronous runtimes.
+The controller never owns an HTTP request, invokes application work, reads a clock, or creates a
+timer. When work waits, the host retains the real request and the controller retains only its
+metadata.
 
 ## Execution model
 
-A conceptual API has the following shape:
+One controller exposes the following state-machine operations:
 
 ```text
 Controller::new(config)
 
-submit(priority, now_ms)                  -> Actions
-complete(request_id, outcome, now_ms)     -> Actions
-advance_time(now_ms)                      -> Actions
-shutdown(now_ms)                          -> Actions
-next_deadline()                           -> Option<Timestamp>
+submit(priority, now_ms)                  -> request ID + actions
+complete(request_id, outcome, now_ms)     -> actions
+cancel(request_id, now_ms)                -> actions
+advance_time(now_ms)                      -> actions
+shutdown(now_ms)                          -> actions
+next_deadline()                           -> optional timestamp
 ```
 
-The initial Rust API refines this shape in several ways:
-
-- `submit` returns both a core-generated `u64` request ID and any immediate actions, so the host can retain a queued request even when no action is emitted.
-- `cancel(request_id, now_ms)` reports host cancellation of queued work.
-- Timestamps are monotonic `u64` milliseconds and a regressing timestamp is rejected rather than clamped.
-- Completion reports `Success` or `Failure`; only successful work will contribute latency samples.
-
-Returned actions represent decisions rather than host operations:
+Actions are decisions, not host operations:
 
 ```text
 Start(request_id)
 Reject(request_id, reason)
 Evict(request_id, reason)
-Cancel(request_id)
-ThresholdChanged(value)
+Cancel(request_id, reason)
+ThresholdChanged(previous, current)
 ConcurrencyChanged(previous, current)
 ```
 
-For example, an adapter stores `request_id -> host task`, executes a task after receiving `Start`, and calls `complete` when that task settles. This avoids passing language-specific closures or return values through the WebAssembly boundary.
+For example, an adapter stores `request_id -> host task`, executes the task after receiving `Start`,
+and calls `complete` when it settles. A queued submission may return no immediate action; the host
+must retain it until a later operation returns `Start`, `Evict`, or `Cancel`.
 
-The exact public API is a design subject, but the separation between decision and execution is an architectural invariant.
-
-## Time and timers
-
-WebAssembly does not universally provide timers, a monotonic clock, an event loop, or threads. The controller therefore does not read time directly:
-
-- The host supplies monotonic timestamps.
-- The core calculates its next deadline.
-- The host schedules the corresponding wake-up.
-- Tests can use a fake clock and remain deterministic.
-
-This model also avoids creating one host timer for every queued request. A deadline heap can process expirations efficiently when the host advances time.
-
-Timestamps supplied to one controller instance must never move backwards. The final API must define whether a regressing timestamp is rejected or clamped.
-
-## Concurrency model
-
-The core does not execute concurrent work. It tracks:
-
-- The current capacity limit.
-- The number of active requests.
-- Waiting requests.
-- Priority ordering.
-- Work that should start when capacity becomes available.
-
-Calls into one controller instance must be serialized. A native binding can add external synchronization, such as a mutex or single-owner event loop, without adding synchronization to the portable algorithm.
-
-Controller state normally belongs to one WebAssembly instance or gateway worker. If a gateway creates several instances, each one has an independent queue, PID state, statistics, and concurrency limit. A process-wide or cluster-wide limit requires shared memory or an external coordinator and is outside the portable core.
+The WebAssembly component mirrors these operations through the WIT contract in
+[`crates/adaptive-admission-component/wit/world.wit`](../crates/adaptive-admission-component/wit/world.wit).
+Language-specific promises, futures, request objects, and errors remain outside that contract.
 
 ## Request lifecycle
 
-The controller maintains explicit request states. The expected lifecycle is:
+Each request follows an explicit lifecycle:
 
 ```text
-Created  -> Queued | Rejected
+Created  -> Queued | Started | Rejected
 Queued   -> Started | Evicted | Cancelled
 Started  -> Completed | Failed
 ```
 
-Invalid transitions must be rejected. Shutdown cancels queued work and rejects future submissions, while work already started remains owned by the host and may finish normally.
+Invalid transitions return errors. Shutdown cancels queued work and rejects future submissions;
+work already started remains owned by the host and may complete normally.
 
-## Priority and queueing
+## Admission, priority, and queueing
 
-Lower numerical values represent more important requests. Requests with equal priority retain FIFO ordering through a monotonic sequence number.
+Priorities are values in `0..=767`, with lower values representing more important work. Hosts may
+construct them as six tiers with 128 cohorts per tier. Cohorts let a host distribute admission
+consistently within a tier without requiring a random source in the core.
 
-A zero-dependency implementation can use:
+The effective threshold is exclusive: a request is rejected when its priority is at or above that
+threshold. A threshold of `768` admits every valid priority. The configured initial threshold also
+acts as the maximum threshold the adaptive controller may use.
 
-- A priority `BinaryHeap` for selecting work.
-- A deadline `BinaryHeap` for expirations.
-- A `HashMap<RequestId, RequestState>` for authoritative state.
-- Lazy removal of stale heap entries.
+If a request passes admission and capacity is available, it starts immediately. Otherwise it enters
+a bounded queue. The queue selects lower priority values first and preserves FIFO order for equal
+priorities. When the queue is full, a new submission is rejected rather than displacing existing
+work.
 
-This avoids requiring arbitrary deletion from Rust's standard `BinaryHeap` and keeps insertion, selection, and expiration logarithmic in normal operation.
+Queue deadlines are inclusive: a queued request expires when `deadline <= now`. Every timestamped
+operation processes elapsed time before applying its requested transition. Expiration therefore wins
+when cancellation or newly available capacity occurs at exactly the deadline.
 
-Queue memory must be explicitly bounded. A deployment should be able to configure a maximum number of queued requests and a policy for submissions that exceed it. Although WebAssembly stores only controller metadata, the host may retain HTTP requests, buffers, and framework state for every queued ID.
+## Time and concurrency
 
-The initial policy rejects the newly submitted request with `QueueFull`. Alternative policies, such as evicting the least important queued request, require an explicit later design decision.
+The core does not assume that WebAssembly or another host provides clocks, timers, threads, or an
+event loop:
 
-Queue deadlines are inclusive: a queued request expires when `deadline <= now`. Every timestamped operation processes elapsed deadlines before applying the requested transition. Consequently, expiration wins when cancellation or newly available capacity occurs at exactly the same timestamp as the deadline.
+- Every timestamp is supplied by the host as monotonic `u64` milliseconds.
+- A timestamp that moves backwards is rejected.
+- `next_deadline` reports the earliest queue, statistics, PID, or tuning deadline.
+- The host calls `advance_time` when that deadline is reached.
+- A late wake-up performs the due update from current observations; it does not synthesize missed
+  intervals.
 
-## Statistics and control
+Calls into one controller must be serialized. The controller tracks active work but does not execute
+it concurrently. A native binding may add a mutex, and an event-loop host may use single ownership,
+without adding synchronization to the portable algorithm.
 
-The core maintains bounded samples and coherent execution buckets for:
+Controller state belongs to one resource, process, or gateway worker. Separate instances have
+independent queues, statistics, thresholds, and concurrency limits. Process-wide or cluster-wide
+limits require external coordination.
 
-- Successful request latency.
-- Minimum, average, and percentile latency.
-- Successful throughput.
-- Observed in-flight work.
-- Priority distribution.
+## Statistics and adaptive control
 
-An execution bucket opens on the first timestamped operation. It closes when both its minimum duration and required percentile sample count have been reached, or when its maximum duration expires. A bucket closed at its maximum duration can still be published with fewer percentile samples when it has enough general samples. Empty and undersized buckets are discarded without replacing the latest published snapshot.
+The controller records bounded samples from successful executions and publishes coherent statistics
+windows containing latency, throughput, and observed in-flight work. Execution latency is measured
+from `Start` until a successful `complete`; queue waiting time is excluded. Failed work releases
+capacity but does not contribute a latency or throughput sample.
 
-Operations arriving when the maximum duration has elapsed first close the previous half-open bucket and then belong to the new bucket. A successful completion that makes an unexpired bucket ready is included before that bucket closes. Bucket IDs advance for every closed bucket, including discarded buckets, so published IDs may contain gaps.
+Statistics windows close when their duration and sample conditions are met, or when their maximum
+duration expires. Undersized windows are discarded rather than replacing the latest usable
+snapshot. Sample collections and histories have explicit bounds.
 
-Successful execution latency is measured from the emitted `Start` action to the corresponding successful `complete`; time spent waiting in the priority queue is excluded. Failures release capacity but do not contribute latency or throughput. Each snapshot contains its time bounds, successful count, minimum and average latency, configured latency percentile, successful throughput per second, and maximum observed in-flight work. Minimum and average latency describe every successful completion in the bucket, while percentile samples are explicitly bounded.
+Three mechanisms consume these observations:
 
-Latency and priority percentiles use Type 7 linear interpolation and truncate the interpolated result toward zero. The implementation uses integer arithmetic for interpolation so the result remains deterministic across native and WebAssembly targets. Priority samples form an independent bounded rolling window and include normal submissions even when threshold admission or queue capacity rejects them; submissions after shutdown are excluded.
+1. **Admission PID:** queue activity, active work, and free capacity adjust an admission percentage.
+   Recent priority percentiles convert that percentage into the effective threshold.
+2. **Adaptive queue timeout:** newly published average latency updates the timeout assigned to later
+   queue entries. Existing entries keep their original deadline.
+3. **Automatic tuning:** filtered percentile latency, minimum latency, throughput, and observed
+   in-flight work gradually adjust concurrency and target latency. Reducing concurrency never
+   interrupts active work, so active work may temporarily exceed a newly reduced limit; increasing
+   concurrency can immediately start queued work.
 
-Statistics configuration defines minimum and maximum bucket durations, publication and percentile sample thresholds, a sample-memory bound, and the latency percentile. Invalid ranges are rejected. `next_deadline` returns the earliest queue, statistics, PID, or auto-tuning deadline, allowing the host to drive every time-based transition without a core-owned timer. Published floating-point averages and throughput values are constructed only from finite integer values and a non-zero duration.
+The current operational threshold, concurrency limit, queue timeout, target latency, and filtered
+latency are available as diagnostics. Diagnostics are observational and are not required for correct
+admission behavior.
 
-The PID controller uses queue entries, queue exits, active work, and free execution capacity to adjust an admission percentage in the inclusive range `0..=100`. Positive pressure reduces admission, while spare capacity recovers it. Each update is bounded by a configured maximum delta. The integral term decays during recovery and is not accumulated when doing so would push an already saturated output farther outside its range.
+## Determinism and numerical safety
 
-PID updates are host-driven deadlines, just like queue expiration and statistics rotation. Activity is accumulated until the next update and consumed exactly once. If the host wakes after the requested deadline, the core performs one update from the accumulated observation and schedules the next deadline from the supplied timestamp; it does not invent empty intermediate intervals.
+Time, priorities, outcomes, and cancellations are explicit inputs. The same valid input sequence
+therefore produces the same actions and state changes.
 
-The resulting percentage is converted to an exclusive priority threshold. When the bounded priority window has enough samples, the percentage is rounded to its nearest whole percentile and the corresponding cumulative percentile plus one is used. Otherwise the percentage is mapped linearly to the configured initial threshold. The effective threshold never exceeds that initial threshold. A changed effective value produces `ThresholdChanged`; unchanged values do not produce an action.
+The implementation uses bounded collections and deterministic percentile interpolation. Invalid
+configuration, integer overflow at public boundaries, and non-finite values that could corrupt
+persistent control state are rejected. The Rust core uses no external production dependencies;
+binding generation and component tooling remain isolated in the WebAssembly crate and build process.
 
-Published average latency also adapts the timeout assigned to new queue entries. The configured timeout is the initial fallback; after each newly published snapshot, the controller rounds `average latency * timeout ratio` to milliseconds and adopts a positive finite result. Requests already queued retain their original deadlines, and discarded statistics windows do not change the timeout.
+## Persistence and observability
 
-The auto-tuner uses published percentile latency, minimum latency, throughput, and observed in-flight work to update concurrency and target latency. Invalid or non-finite values must not be allowed to corrupt controller state.
+Controller state is in memory, including queued metadata, statistics, PID state, tuning history, the
+admission threshold, and the concurrency limit. Restarting an instance discards that state.
+Persistence or restoration, if required by an embedding, is a host responsibility and must never
+attempt to persist live requests or continuations.
 
-Concurrency tuning is checked every two seconds and target-latency tuning every ten seconds. These are host-driven deadlines: a late wake-up performs one update and schedules the next deadline from the supplied timestamp rather than replaying missed intervals. Each controller consumes a published statistics snapshot at most once for each tuning loop.
+The core does not depend on a logger or telemetry SDK. A host can translate returned actions,
+statistics, and diagnostics into logs, metrics, or traces. Observability callbacks must not re-enter
+the controller during a state mutation.
 
-Percentile latency is filtered through the lower median of the latest five samples and an exponential moving average weighted 80% toward the previous filtered value. The concurrency controller compares this value with the current target, changes capacity gradually, never drops below one, and bounds growth to ten times the in-flight work observed in the same statistics window. Lowering capacity never interrupts active work. Increasing capacity can immediately emit `Start` actions after elapsed queue deadlines have been processed.
+## Portability
 
-Target latency starts at 100 ms. During a ten-sample warm-up it follows the latest positive minimum latency. Afterwards, the covariance between bounded in-flight and throughput history determines whether the target moves toward minimum latency, decreases, or remains unchanged. Three consecutive tuned windows at concurrency one recalibrate the target from observed latency and probe concurrency two. Histories and latency samples are explicitly bounded.
-
-## Randomness
-
-Rust's standard library does not provide a portable random source suitable for every WebAssembly host. The core should not implicitly depend on host randomness.
-
-A cohort can instead be:
-
-- Supplied explicitly by the adapter.
-- Derived deterministically from request or client data.
-- Generated through an optional host capability.
-
-Deterministic cohort assignment is often preferable because it provides stable admission behavior for the same client or request class.
-
-## Persistence
-
-Controller state is in memory:
-
-- Queued request metadata.
-- Statistics and execution windows.
-- PID integral and previous error.
-- Admission threshold.
-- Concurrency limit.
-- Auto-tuning history.
-
-Restarting an instance discards this state. If state restoration is introduced, storage remains a host responsibility. Portable snapshots may contain control state, but never live callbacks, requests, or host continuations.
-
-## Logging and observability
-
-The core must not depend on a concrete logger. It can expose structured controller events that an adapter translates into logs, metrics, or traces.
-
-Returning or draining events is preferable to invoking a host logging callback during state mutation because host callbacks can introduce re-entrancy. Diagnostic events must not be required for correct controller behavior.
-
-## Portability layers
-
-The implementation may be divided into focused crates:
+The repository separates two layers:
 
 ```text
-adaptive-admission-core        Host-independent Rust algorithm
+adaptive-admission-core        Host-independent Rust state machine
 adaptive-admission-component   WIT / WebAssembly Component Model interface
-adaptive-admission-proxy-wasm  Proxy-Wasm integration
-adaptive-admission-cabi        Optional C ABI for native bindings
 ```
 
-The core can rely on standard Rust types such as `BinaryHeap`, `HashMap`, `Vec`, and `VecDeque`, with small local implementations of mean, percentile, and covariance.
+The component is built for `wasm32-unknown-unknown` and imports no ambient WASI clock, randomness,
+I/O, callbacks, or logging. Each exported `admission-controller` resource owns one independent core
+controller.
 
-Starting with `std` keeps the implementation and bindings straightforward. A move to `no_std + alloc` should only be considered when required by a supported host.
+No WebAssembly ABI works in every gateway. A gateway may support the Component Model, Proxy-Wasm, a
+proprietary SDK, or only a synchronous admission hook. ABI-specific code belongs in an adapter, not
+in the core. A full adapter must verify that its platform can pause and resume requests, schedule
+timers, report cancellation, retain state at a suitable scope, and handle reload and shutdown.
 
-### WebAssembly interfaces
+See the [host adapter contract](host-adapters.md) for the complete embedding requirements.
 
-No single WebAssembly ABI is universally supported by gateways:
+## Non-goals
 
-- Some hosts use Proxy-Wasm.
-- Some support WASI or the WebAssembly Component Model.
-- Native applications may prefer a C ABI or language-specific embedding API.
-- Other gateways expose proprietary SDKs.
+The portable core does not:
 
-The algorithm can remain common even when the integration artifacts differ. ABI-specific code belongs outside the core crate.
-
-### Gateway capabilities
-
-Reproducing priority queueing requires the gateway to pause and later resume a request. A host that only exposes a synchronous admission hook can support immediate `Allow | Reject` decisions but cannot reproduce queued execution safely.
-
-Every gateway adapter must define:
-
-- Whether requests can be paused and resumed.
-- Whether plugin instances are per request, worker, process, or service.
-- How timers are scheduled.
-- How cancellation and client disconnects are reported.
-- What memory limits apply to the module and retained host state.
-- How module reload and shutdown affect queued and active requests.
+- Execute callbacks, promises, futures, or application work.
+- Include an asynchronous runtime or HTTP integration.
+- Manage threads, sockets, process signals, clocks, timers, or random sources.
+- Provide persistence or distributed coordination.
+- Enforce a global limit across independent instances.
+- Guarantee that one WebAssembly artifact can be installed unchanged in every gateway ABI.
 
 ## Behavioral guarantees
 
-The implementation should preserve these properties:
+The implementation and shared conformance scenarios preserve these properties:
 
 - Lower priority values receive precedence.
 - Equal priorities retain FIFO order.
 - Requests only perform legal state transitions.
-- The controller never starts work beyond its current concurrency limit.
-- Queued requests can expire without executing host work.
-- Shutdown cancels pending work without interrupting work already started.
-- Statistics buckets describe coherent execution periods.
-- Sample collections and queues have explicit bounds.
+- The controller does not start additional work while active work is at or above the current
+  concurrency limit.
+- Queues and sample collections are bounded.
+- Queued work can expire without executing host work.
+- Shutdown cancels pending work without interrupting active work.
+- Statistics describe coherent execution periods.
 - Non-finite numerical values do not enter persistent control state.
 - The same input event sequence produces the same output actions.
 
-## Conformance strategy
-
-Behavior should be specified as input traces and expected actions rather than tests coupled to internal classes. Scenarios should cover:
-
-- Admission and rejection.
-- Priority and FIFO ordering.
-- Queue limits and timeout eviction.
-- Completion, failure, cancellation, and shutdown.
-- PID calculations and threshold changes.
-- Percentile and rounding behavior.
-- Statistics snapshots.
-- Concurrency and latency tuning.
-- Invalid transitions and non-monotonic time.
-
-The same fixtures can be executed against the existing TypeScript implementation and the Rust core to identify intentional and accidental differences.
-
-## Implementation sequence
-
-A low-risk implementation sequence is:
-
-1. Define behavioral traces and numerical compatibility fixtures.
-2. Implement the host-independent Rust state machine.
-3. Run cross-implementation conformance tests.
-4. Compile the stable core to WebAssembly.
-5. Publish language-neutral conformance fixtures for independent host implementations.
-6. Build language adapters, such as an idiomatic Promise-based Node.js package, in their own packages or repositories.
-7. Validate one concrete gateway, including pause/resume, timers, worker scope, memory, reload, and shutdown.
-8. Add integrations only after distinguishing common guarantees from host-specific behavior.
-
-This sequence validates the architecture before committing to a gateway ABI and keeps portability concerns out of the control algorithm.
-
-### First implementation iteration
-
-The first iteration contains one workspace crate, `adaptive-admission-core`, with no production dependencies. It implements configuration validation, deterministic request IDs, fixed-threshold admission, bounded priority/FIFO queueing, fixed concurrency, queue expiration, completion, cancellation, shutdown, and explicit actions.
-
-Its initial internal components are:
-
-```text
-Controller
-├── AdmissionController
-├── Scheduler
-└── PriorityQueue
-```
-
-Statistics, PID feedback, adaptive timeouts, automatic tuning, WebAssembly interfaces, and host adapters are deliberately deferred until this state-machine boundary is covered by conformance scenarios.
-
-### Second implementation iteration
-
-The second iteration adds bounded priority and latency samples, host-driven execution windows, published statistics snapshots, and observed in-flight tracking. The scheduler retains each active request's start timestamp so successful service latency excludes queue waiting time. The controller exposes the latest published snapshot and cumulative priority percentiles, and its next deadline now includes statistics-window rotation.
-
-PID feedback, adaptive timeouts, and automatic concurrency and latency tuning remain deferred. This keeps the measurement contract independently testable before statistics begin changing admission or capacity decisions.
-
-### Third implementation iteration
-
-The third iteration adds host-driven PID admission feedback. A focused PID component maintains the admission percentage, integral, previous error, and next update deadline. The priority queue reports bounded activity counters to the controller, which combines them with active and available execution capacity and converts each due PID result into an effective priority threshold.
-
-PID gains must be finite and non-negative, its interval must be positive, its maximum per-update delta must be within `0..=100`, and integral decay must be within `0..=1`. The default parameters preserve the TypeScript implementation's tuning values while execution remains synchronous and deterministic in the portable core.
-
-Adaptive queue timeouts and automatic concurrency and target-latency tuning remain deferred. Keeping capacity and timeout fixed makes admission feedback independently testable before a later controller starts changing more than one actuator.
-
-### Fourth implementation iteration
-
-The fourth iteration adds adaptive queue timeouts driven by published execution statistics. The configured timeout remains the initial value until a valid snapshot exists. Each new snapshot can update the timeout to the rounded product of average successful execution latency and a configured ratio; zero or non-finite results leave the previous value unchanged. The ratio must be finite and within `0 < ratio <= 1`.
-
-Timeout updates apply only to requests queued afterward. Existing requests retain the deadline assigned at submission, preserving deterministic expiration without rebuilding the deadline heap. No independent timeout-update deadline is introduced because recalculation without a new statistics snapshot cannot produce new information.
-
-Automatic concurrency and target-latency tuning remain deferred so that timeout adaptation can be verified while execution capacity stays fixed.
-
-### Fifth implementation iteration
-
-The fifth iteration adds automatic concurrency and target-latency tuning driven by published execution snapshots. The configured `max_concurrent_requests` value becomes the initial capacity. A focused auto-tuner maintains bounded throughput/concurrency history, filters percentile latency, adapts the latency target, and updates scheduler capacity without owning timers or executing work.
-
-Concurrency and latency checks use independent host-driven deadlines and process each snapshot once per loop. Capacity changes produce `ConcurrencyChanged { previous, current }`. A decrease does not cancel active requests and takes effect as work completes; an increase fills available slots from the priority queue after same-timestamp expirations. This completes the adaptive core before adding WebAssembly interfaces and host adapters.
-
-### Sixth implementation iteration
-
-The sixth iteration adds `adaptive-admission-component`, a WebAssembly Component Model boundary described by WIT. It is compiled through the capability-free `wasm32-unknown-unknown` target and converted to a component, avoiding ambient WASI imports. Each exported `admission-controller` resource owns one independent core `Controller`. Its methods mirror the synchronous state-machine operations and expose deadlines and published statistics without importing clocks, timers, randomness, I/O, callbacks, logging, or asynchronous execution.
-
-Configuration, actions, snapshots, outcomes, and errors cross the component boundary as explicit structured values. WIT uses fixed-width integers; values representing Rust collection bounds are checked before conversion to `usize`. Request IDs returned by `submit` are opaque host-held values that can be passed back to `complete` and `cancel`; the core remains responsible for rejecting unknown IDs and illegal transitions.
-
-The component uses generated bindings only in the integration crate, keeping `adaptive-admission-core` free of WebAssembly dependencies. Componentizing the compiled module produces a self-describing artifact whose only public surface is the exported controller interface. Host-language convenience APIs, Promise or future management, and gateway-specific lifecycle behavior remain adapter responsibilities for later iterations.
-
-### Seventh implementation iteration
-
-The seventh iteration publishes language-neutral JSON conformance scenarios for the observable state-machine contract. Each fixture defines controller configuration, an ordered trace of timestamped operations, and the exact actions, errors, deadlines, statistics, or percentiles expected at each step. Request aliases let fixtures refer to opaque controller-generated IDs without adopting a language-specific representation.
-
-A Rust test runner executes every fixture against `adaptive-admission-core`. Serialization remains test-only so the core keeps its zero-production-dependency policy. Rust-native tests continue to cover non-finite numbers, integer limits, and implementation details that JSON cannot represent.
-
-The fixtures are intended for reuse by separately distributed language and gateway adapters. This repository remains scoped to the Rust core, its portable WebAssembly component boundary, and the shared conformance contract; it does not contain npm or other host-language adapter packages.
-
-### Eighth implementation iteration
-
-The eighth iteration makes the existing component and conformance contract consumable as a versioned distribution without adding host-language adapters. The workspace package version is the release source of truth and must remain synchronized with the WIT package version. Pull requests validate the Rust workspace and the final WebAssembly component through the same Makefile targets used locally.
-
-A merge to `main` declares a release candidate. After all checks pass, automation builds the component once and publishes a GitHub Release whose tag matches the workspace version. The release contains the validated component, its WIT contract, the language-neutral conformance bundle, and checksums. Publication has narrowly scoped write permission and promotes the exact assets produced by the read-only build job rather than recompiling them.
-
-Language packages and gateway integrations remain outside this repository. They consume a tagged component and conformance version and own their platform-specific execution, lifecycle, and packaging concerns.
+Language and gateway hosts validate the observable contract with the JSON fixtures documented in
+[`conformance/README.md`](../conformance/README.md). Target-specific representation, resource,
+timer, and packaging behavior remains the responsibility of each host implementation.

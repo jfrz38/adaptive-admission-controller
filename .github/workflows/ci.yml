@@ -10,12 +10,15 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -36,6 +39,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Restore wasm-tools
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cargo/bin/wasm-tools
+          key: wasm-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
       - name: Install wasm-tools
         run: make install-wasm-tools
       - name: Build and validate component
@@ -53,13 +61,22 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+      - name: Resolve previous published release
+        id: release-baseline
+        shell: bash
+        run: |
+          tag=$(sh scripts/latest-release-tag.sh)
+          if [ -n "${tag}" ]; then
+            git fetch origin "refs/tags/${tag}:refs/tags/${tag}"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Verify release version increased
-        uses: jfrz38/check-version-change@176c454a13e14862ec362573f26c9e9395855d0c # v1.5.0
+        if: steps.release-baseline.outputs.tag != ''
+        uses: jfrz38/check-version-change@12828e3736f108329fe0ea7a8800966b4b2730af # v1.6.0
         with:
-          file-path: Cargo.toml
-          file-format: raw
-          version-pattern: '^version\s*=\s*"(\d+\.\d+\.\d+)"'
+          file-path: crates/adaptive-admission-core/Cargo.toml
           compare-source: git-ref
+          compare-ref: ${{ steps.release-baseline.outputs.tag }}
           allow-missing-compare-file: true
           fail-on-unchanged: true
           fail-on-not-higher: true
